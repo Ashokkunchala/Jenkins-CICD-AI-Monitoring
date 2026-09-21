@@ -86,6 +86,36 @@ resource "aws_iam_role" "agent" {
   tags               = var.extra_tags
 }
 
+data "aws_iam_policy_document" "sfn_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    effect  = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["states.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "sfn" {
+  name               = "${var.project_name}-${var.environment}-ai-agent-sfn"
+  assume_role_policy = data.aws_iam_policy_document.sfn_assume.json
+  tags               = var.extra_tags
+}
+
+resource "aws_iam_role_policy" "sfn" {
+  role = aws_iam_role.sfn.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "lambda:InvokeFunction"
+      Resource = aws_lambda_function.agent.arn
+    }]
+  })
+}
+
 data "aws_iam_policy_document" "agent" {
   statement {
     effect = "Allow"
@@ -137,7 +167,7 @@ data "aws_iam_policy_document" "agent" {
       "states:StartExecution",
       "states:DescribeExecution"
     ]
-    resources = ["*"]
+    resources = [aws_sfn_state_machine.agent.arn]
   }
 }
 
@@ -167,6 +197,7 @@ resource "aws_lambda_function" "agent" {
       GITHUB_TOKEN      = var.github_token
       GITHUB_OWNER      = var.github_owner
       GITHUB_REPO       = var.github_repo
+      STATE_MACHINE_ARN  = aws_sfn_state_machine.agent.arn
       NOTIFY_EMAIL      = var.alert_email
     }
   }
@@ -201,7 +232,7 @@ resource "aws_lambda_permission" "webhook" {
 # -----------------------------------------------------------
 resource "aws_sfn_state_machine" "agent" {
   name     = "${var.project_name}-${var.environment}-cicd-agent-workflow"
-  role_arn = aws_iam_role.agent.arn
+  role_arn = aws_iam_role.sfn.arn
   type     = "STANDARD"
 
   definition = jsonencode({
