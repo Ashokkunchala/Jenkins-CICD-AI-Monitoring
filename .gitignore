@@ -1,0 +1,28 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfplan
+tfplan
+*.tfvars
+!terraform.tfvars.example
+.terraform.lock.hcl
+
+# Generated/private keys
+*.pem
+*.key
+*.pub
+.ssh/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Runtime artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
