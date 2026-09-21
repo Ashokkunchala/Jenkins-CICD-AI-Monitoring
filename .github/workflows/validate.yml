@@ -22,8 +22,14 @@ jobs:
         run: terraform fmt -check -recursive
       - name: Initialize without backend
         run: terraform init -backend=false
-      - name: Validate
+      - name: Validate root
         run: terraform validate
+
+      - name: Validate simple lab
+        working-directory: examples/simple
+        run: |
+          terraform init -backend=false
+          terraform validate
 
   python:
     name: Python syntax validation
