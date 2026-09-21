@@ -247,6 +247,7 @@ resource "aws_sfn_state_machine" "agent" {
           "code_diff.$" = "$.code_diff"
           "build_log.$" = "$.build_log"
         }
+        ResultPath = "$.precheck_result"
         Next = "AnalyzeBuild"
         Catch = [{
           ErrorEquals = ["States.ALL"]
@@ -260,7 +261,9 @@ resource "aws_sfn_state_machine" "agent" {
           "action.$"          = "States.Format('{}', 'analyze')"
           "precheck_result.$" = "$.precheck_result"
           "stage.$"           = "$.stage"
+          "build_log.$"       = "$.build_log"
         }
+        ResultPath = "$.analysis"
         Next = "PredictIssues"
         Catch = [{
           ErrorEquals = ["States.ALL"]
@@ -275,6 +278,7 @@ resource "aws_sfn_state_machine" "agent" {
           "history.$"  = "$.history"
           "analysis.$" = "$.analysis"
         }
+        ResultPath = "$.predictions"
         Next = "SelfFix"
         Catch = [{
           ErrorEquals = ["States.ALL"]
@@ -289,6 +293,7 @@ resource "aws_sfn_state_machine" "agent" {
           "fixable_issues.$" = "$.predictions.fixable"
           "code_diff.$"      = "$.code_diff"
         }
+        ResultPath = "$.fix_result"
         Next = "ClassifyIssues"
         Catch = [{
           ErrorEquals = ["States.ALL"]
@@ -302,14 +307,15 @@ resource "aws_sfn_state_machine" "agent" {
           "action.$"           = "States.Format('{}', 'classify')"
           "remaining_issues.$" = "$.remaining_issues"
         }
+        ResultPath = "$.classification"
         Next = "NotifyDevOps"
       }
       NotifyDevOps = {
         Type     = "Task"
         Resource = aws_lambda_function.agent.arn
         Parameters = {
-          "action.$"  = "States.Format('{}', 'notify')"
-          "summary.$" = "$.summary"
+          "action"    = "notify"
+          "payload.$" = "$"
         }
         End = true
       }
