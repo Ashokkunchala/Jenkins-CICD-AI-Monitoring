@@ -33,11 +33,6 @@ provider "aws" {
   }
 }
 
-# Tag all instances for the scheduler (stop/start at night/weekends)
-resource "null_resource" "schedule_tag_hint" {
-  lifecycle {}
-}
-
 locals {
   schedule_tag_name  = "${var.project_name}-${var.environment}-schedule"
   schedule_tag_value = "true"
