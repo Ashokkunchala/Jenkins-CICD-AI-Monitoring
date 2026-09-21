@@ -256,18 +256,3 @@ resource "aws_ec2_fleet" "arm64" {
 # -----------------------------------------------------------
 # Auto Scaling to adjust fleet capacity based on demand
 # -----------------------------------------------------------
-resource "aws_appautoscaling_target" "amd64" {
-  max_capacity       = var.max_target_capacity
-  min_capacity       = var.min_target_capacity
-  resource_id        = "fleet/${aws_ec2_fleet.amd64.id}"
-  scalable_dimension = "ec2:fleet:DesiredCapacity"
-  service_namespace  = "ec2"
-}
-
-resource "aws_appautoscaling_target" "arm64" {
-  max_capacity       = var.max_target_capacity
-  min_capacity       = var.min_target_capacity
-  resource_id        = "fleet/${aws_ec2_fleet.arm64.id}"
-  scalable_dimension = "ec2:fleet:DesiredCapacity"
-  service_namespace  = "ec2"
-}
