@@ -13,7 +13,7 @@ output "sonarqube_private_ip" {
   value       = aws_instance.sonarqube.private_ip
 }
 
-output "pem_file_path" {
-  description = "Path to SonarQube PEM file"
-  value       = pathexpand("~/.ssh/sonar.pem")
+output "key_name" {
+  description = "SonarQube key pair name"
+  value       = aws_key_pair.this.key_name
 }

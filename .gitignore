@@ -8,7 +8,14 @@ crash.*.log
 tfplan
 *.tfvars
 !terraform.tfvars.example
-.terraform.lock.hcl
+# Generated archives
+*.generated.zip
+modules/ai-cicd-agent/lambdas/*.zip
+modules/instance-scheduler/*.zip
+
+# Preserved offline state copies (never loaded by Terraform)
+*.tfstate.local
+*.tfstate.backup.local
 
 # Generated/private keys
 *.pem

@@ -1,61 +1,60 @@
 #!/bin/bash
-set -euxo pipefail
-
-# ============================================================
-# Nexus Repository OSS Setup Script
-# ============================================================
+set -euo pipefail
 
 NEXUS_VERSION="${nexus_version}"
+NEXUS_SHA256="${nexus_sha256}"
 NEXUS_USER=nexus
 NEXUS_HOME=/opt/nexus
 SONATYPE_WORK=/opt/sonatype-work
 
-exec > /var/log/nexus-setup.log 2>&1
+exec > >(tee -a /var/log/nexus-setup.log) 2>&1
 
-# -----------------------------------------------------------
-# System packages
-# -----------------------------------------------------------
+verify_sha256() {
+  local file="$1" expected="$2" actual
+  if [ -z "$expected" ]; then
+    echo "No expected sha256 supplied for $file; set nexus_sha256 to change this pin" >&2
+    return 0
+  fi
+  actual=$(openssl dgst -sha256 "$file" | awk '{print $NF}')
+  if [ "$actual" != "$expected" ]; then
+    echo "Checksum mismatch for $file: expected sha256=$expected, got $actual" >&2
+    exit 1
+  fi
+  echo "Verified sha256 for $file"
+}
+
 dnf update -y
 dnf install -y \
-  curl \
-  wget \
-  unzip \
-  tar \
-  git \
-  jq \
-  java-17-amazon-corretto-devel \
   amazon-cloudwatch-agent \
-  awscli
+  awscli \
+  curl \
+  git \
+  java-17-amazon-corretto-devel \
+  jq \
+  openssl \
+  tar \
+  unzip \
+  wget
 
-# -----------------------------------------------------------
-# Nexus Repository OSS
-# -----------------------------------------------------------
-useradd -m -d $NEXUS_HOME -s /bin/bash $NEXUS_USER
+useradd --create-home --home-dir "$NEXUS_HOME" --shell /bin/bash "$NEXUS_USER" || true
+if [ ! -x "$NEXUS_HOME/bin/nexus" ]; then
+  curl -fsSL "https://download.sonatype.com/nexus/3/nexus-$NEXUS_VERSION-unix.tar.gz" -o /tmp/nexus.tar.gz
+  verify_sha256 /tmp/nexus.tar.gz "$NEXUS_SHA256"
+  tar xzf /tmp/nexus.tar.gz -C /opt
+  mv "/opt/nexus-$NEXUS_VERSION" "$NEXUS_HOME"
+fi
+mkdir -p "$SONATYPE_WORK"
 
-curl -fsSL "https://download.sonatype.com/nexus/3/nexus-$NEXUS_VERSION-unix.tar.gz" \
-  -o /tmp/nexus.tar.gz
-
-tar xzf /tmp/nexus.tar.gz -C /opt
-mv "/opt/nexus-$NEXUS_VERSION" $NEXUS_HOME
-mkdir -p $SONATYPE_WORK
-
-# Nexus configuration
-cat > $NEXUS_HOME/etc/nexus-default.properties << 'NEXUSPROP'
-# Jetty section
+cat > "$NEXUS_HOME/etc/nexus-default.properties" << 'NEXUSPROPERTIES'
 application-port=8081
 application-host=0.0.0.0
-nexus-args=$${jetty.etc}/jetty.xml,$${jetty.etc}/jetty-http.xml,$${jetty.etc}/jetty-https.xml
+nexus-args=$NEXUS_HOME/etc/jetty.xml,$NEXUS_HOME/etc/jetty-http.xml,$NEXUS_HOME/etc/jetty-https.xml
 nexus-context-path=/
-
-# Nexus section
-nexus-edition=nexus-pro-edition
-nexus-features=\
- nexus-pro-feature
+nexus-edition=nexus-oss-edition
 nexus.hardware.detect=true
-NEXUSPROP
+NEXUSPROPERTIES
 
-# JVM configuration
-cat > $NEXUS_HOME/bin/nexus.vmoptions << 'NEXUSJVM'
+cat > "$NEXUS_HOME/bin/nexus.vmoptions" << 'NEXUSJVM'
 -Xms1200m
 -Xmx1200m
 -XX:MaxDirectMemorySize=2G
@@ -73,8 +72,7 @@ cat > $NEXUS_HOME/bin/nexus.vmoptions << 'NEXUSJVM'
 -Dkaraf.startLocalConsole=false
 NEXUSJVM
 
-# Systemd service
-cat > /etc/systemd/system/nexus.service << NEXUSSVC
+cat > /etc/systemd/system/nexus.service << NEXUSSERVICE
 [Unit]
 Description=Nexus Repository Manager
 After=network.target
@@ -85,31 +83,41 @@ LimitNOFILE=65536
 ExecStart=$NEXUS_HOME/bin/nexus start
 ExecStop=$NEXUS_HOME/bin/nexus stop
 ExecReload=$NEXUS_HOME/bin/nexus restart
-User=nexus
-Group=nexus
+User=$NEXUS_USER
+Group=$NEXUS_USER
 Restart=on-failure
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-NEXUSSVC
+NEXUSSERVICE
 
-chown -R $NEXUS_USER:$NEXUS_USER $NEXUS_HOME
-chown -R $NEXUS_USER:$NEXUS_USER $SONATYPE_WORK
-
-# Increase ulimits
-cat >> /etc/security/limits.conf << 'LIMITS'
-nexus   -   nofile   65536
-nexus   -   nproc    4096
+chown -R "$NEXUS_USER:$NEXUS_USER" "$NEXUS_HOME" "$SONATYPE_WORK"
+cat > /etc/security/limits.d/99-nexus.conf << 'LIMITS'
+nexus - nofile 65536
+nexus - nproc 4096
 LIMITS
 
 systemctl daemon-reload
-systemctl enable nexus
-systemctl start nexus
+systemctl enable --now nexus
 
-# -----------------------------------------------------------
-# CloudWatch Agent
-# -----------------------------------------------------------
+for attempt in $(seq 1 90); do
+  if curl -fsS http://127.0.0.1:8081/service/rest/v1/status >/dev/null; then
+    break
+  fi
+  if [ "$attempt" -eq 90 ]; then
+    exit 1
+  fi
+  sleep 5
+done
+
+if [ -f "$SONATYPE_WORK/nexus3/admin.password" ]; then
+  install -d -o "$NEXUS_USER" -g "$NEXUS_USER" -m 0700 "$NEXUS_HOME/.credentials"
+  printf 'username=admin\npassword=%s\n' "$(cat "$SONATYPE_WORK/nexus3/admin.password")" > "$NEXUS_HOME/.credentials/admin"
+  chown "$NEXUS_USER:$NEXUS_USER" "$NEXUS_HOME/.credentials/admin"
+  chmod 0600 "$NEXUS_HOME/.credentials/admin"
+fi
+
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CONF'
 {
   "agent": {
@@ -157,18 +165,7 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CONF
 }
 CONF
 
-systemctl enable amazon-cloudwatch-agent
-systemctl start amazon-cloudwatch-agent
-
-# -----------------------------------------------------------
-# Cleanup
-# -----------------------------------------------------------
+systemctl enable --now amazon-cloudwatch-agent
 dnf clean all
-rm -rf /tmp/nexus.tar.gz
-
-# Wait for Nexus to be ready
-sleep 60
-
-echo "Nexus setup complete!"
-echo "URL: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):8081"
-echo "Default login: admin / admin123"
+rm -f /tmp/nexus.tar.gz
+logger -t nexus "Nexus Repository is configured; initial credentials are stored on the instance when generated"

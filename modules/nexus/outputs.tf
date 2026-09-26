@@ -13,7 +13,7 @@ output "nexus_private_ip" {
   value       = aws_instance.nexus.private_ip
 }
 
-output "pem_file_path" {
-  description = "Path to Nexus PEM file"
-  value       = pathexpand("~/.ssh/nexus.pem")
+output "key_name" {
+  description = "Nexus key pair name"
+  value       = aws_key_pair.this.key_name
 }

@@ -6,6 +6,21 @@ variable "vpc_id" {
 variable "allowed_ssh_cidr" {
   description = "CIDR block allowed to SSH"
   type        = string
+
+  validation {
+    condition     = can(cidrhost(var.allowed_ssh_cidr, 0)) && var.allowed_ssh_cidr != "0.0.0.0/0"
+    error_message = "allowed_ssh_cidr must be a valid restricted IPv4 CIDR block."
+  }
+}
+
+variable "allowed_web_cidr" {
+  description = "CIDR block allowed to access web interfaces"
+  type        = string
+
+  validation {
+    condition     = can(cidrhost(var.allowed_web_cidr, 0)) && var.allowed_web_cidr != "0.0.0.0/0"
+    error_message = "allowed_web_cidr must be a valid restricted IPv4 CIDR block."
+  }
 }
 
 variable "environment" {
@@ -21,5 +36,9 @@ variable "project_name" {
 variable "vpc_cidr_block" {
   description = "VPC CIDR block for internal communication"
   type        = string
-  default     = "10.0.0.0/16"
+
+  validation {
+    condition     = can(cidrhost(var.vpc_cidr_block, 0))
+    error_message = "vpc_cidr_block must be a valid CIDR block."
+  }
 }

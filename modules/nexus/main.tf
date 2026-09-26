@@ -1,21 +1,30 @@
-resource "tls_private_key" "this" {
-  algorithm = "RSA"
-  rsa_bits  = 4096
-}
+data "aws_iam_policy_document" "instance_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    effect  = "Allow"
 
-resource "aws_key_pair" "this" {
-  key_name   = "${var.project_name}-${var.environment}-nexus"
-  public_key = tls_private_key.this.public_key_openssh
-
-  tags = {
-    Name = "${var.project_name}-${var.environment}-nexus-key"
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
   }
 }
 
-resource "local_sensitive_file" "pem" {
-  filename        = pathexpand("~/.ssh/nexus.pem")
-  content         = tls_private_key.this.private_key_pem
-  file_permission = "0600"
+resource "aws_iam_role" "instance" {
+  name               = "${var.project_name}-${var.environment}-nexus-role"
+  assume_role_policy = data.aws_iam_policy_document.instance_assume.json
+  tags               = var.extra_tags
+}
+
+resource "aws_iam_role_policy_attachment" "cloudwatch" {
+  role       = aws_iam_role.instance.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+}
+
+resource "aws_iam_instance_profile" "instance" {
+  name = "${var.project_name}-${var.environment}-nexus-profile"
+  role = aws_iam_role.instance.name
+  tags = var.extra_tags
 }
 
 data "aws_ami" "amazon_linux_2023" {
@@ -33,29 +42,62 @@ data "aws_ami" "amazon_linux_2023" {
   }
 }
 
+resource "aws_key_pair" "this" {
+  key_name   = "${var.project_name}-${var.environment}-nexus"
+  public_key = var.ssh_public_key
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-nexus-key"
+  }
+}
+
+locals {
+  # A pinned ami_id keeps plans stable across AL2023 releases. Left empty, the
+  # current AMI is resolved, which replaces the instance when a new AMI ships.
+  nexus_ami_id = var.ami_id != "" ? var.ami_id : data.aws_ami.amazon_linux_2023.id
+}
+
 resource "aws_instance" "nexus" {
-  ami                    = data.aws_ami.amazon_linux_2023.id
+  ami                    = local.nexus_ami_id
   instance_type          = var.instance_type
   subnet_id              = var.subnet_id
   vpc_security_group_ids = [var.security_group_id]
   key_name               = aws_key_pair.this.key_name
+  iam_instance_profile   = aws_iam_instance_profile.instance.name
+  monitoring             = var.enable_detailed_monitoring
+  ebs_optimized          = true
 
+  # An Elastic IP is attached below. associate_public_ip_address stays enabled so
+  # user_data has outbound access from first boot, before the EIP association
+  # completes; the EIP takes over the public address once attached.
   associate_public_ip_address = true
 
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  maintenance_options {
+    auto_recovery = "default"
+  }
+
   root_block_device {
-    volume_size = 20
-    volume_type = "gp3"
-    encrypted   = true
-    iops        = 3000
+    volume_size           = 30
+    volume_type           = "gp3"
+    encrypted             = true
+    iops                  = 3000
+    delete_on_termination = true
 
     tags = merge(var.extra_tags, {
       Name = "${var.project_name}-${var.environment}-nexus-root"
     })
   }
 
-  user_data = templatefile("${path.module}/scripts/setup.sh", {
+  user_data_base64 = base64encode(templatefile("${path.module}/scripts/setup.sh", {
     nexus_version = var.nexus_version
-  })
+    nexus_sha256  = var.nexus_sha256
+  }))
 
   tags = merge(var.extra_tags, {
     Name = "${var.project_name}-${var.environment}-nexus"
@@ -63,11 +105,10 @@ resource "aws_instance" "nexus" {
 }
 
 resource "aws_eip" "this" {
-  domain = "vpc"
-
+  domain   = "vpc"
   instance = aws_instance.nexus.id
 
-  tags = {
+  tags = merge(var.extra_tags, {
     Name = "${var.project_name}-${var.environment}-nexus-eip"
-  }
+  })
 }

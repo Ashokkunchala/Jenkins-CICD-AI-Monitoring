@@ -1,6 +1,14 @@
-# -----------------------------------------------------------
-# DynamoDB — build history & issue tracking
-# -----------------------------------------------------------
+data "aws_caller_identity" "current" {}
+
+data "aws_partition" "current" {}
+
+locals {
+  state_machine_name = "${var.project_name}-${var.environment}-cicd-agent-workflow"
+  state_machine_arn  = "${data.aws_partition.current.partition}:states:${var.aws_region}:${data.aws_caller_identity.current.account_id}:stateMachine:${local.state_machine_name}"
+  lambda_name        = "${var.project_name}-${var.environment}-cicd-agent"
+  github_secret_arn  = try(aws_secretsmanager_secret.github[0].arn, "")
+}
+
 resource "aws_dynamodb_table" "issues" {
   name         = "${var.project_name}-${var.environment}-cicd-issues"
   billing_mode = "PAY_PER_REQUEST"
@@ -22,6 +30,14 @@ resource "aws_dynamodb_table" "issues" {
     projection_type = "ALL"
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
   tags = var.extra_tags
 }
 
@@ -40,12 +56,17 @@ resource "aws_dynamodb_table" "predictions" {
     enabled        = true
   }
 
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
   tags = var.extra_tags
 }
 
-# -----------------------------------------------------------
-# SNS — alerts for Teams / Email
-# -----------------------------------------------------------
 resource "aws_sns_topic" "alerts" {
   name = "${var.project_name}-${var.environment}-cicd-alerts"
 
@@ -66,13 +87,36 @@ resource "aws_sns_topic_subscription" "teams" {
   endpoint  = var.teams_webhook_url
 }
 
-# -----------------------------------------------------------
-# IAM — Lambda role
-# -----------------------------------------------------------
+resource "aws_secretsmanager_secret" "github" {
+  count = var.github_token != "" ? 1 : 0
+  name  = "${var.project_name}-${var.environment}-github-token"
+  tags  = var.extra_tags
+
+  recovery_window_in_days = 7
+
+  lifecycle {
+    precondition {
+      condition     = var.github_token == "" || (trimspace(var.github_owner) != "" && trimspace(var.github_repo) != "")
+      error_message = "github_owner and github_repo are required when github_token is set."
+    }
+    precondition {
+      condition     = !var.github_auto_fix_enabled || (var.github_token != "" && trimspace(var.github_owner) != "" && trimspace(var.github_repo) != "")
+      error_message = "github_auto_fix_enabled requires github_token, github_owner, and github_repo."
+    }
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "github" {
+  count         = var.github_token != "" ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.github[0].id
+  secret_string = var.github_token
+}
+
 data "aws_iam_policy_document" "lambda_assume" {
   statement {
     actions = ["sts:AssumeRole"]
     effect  = "Allow"
+
     principals {
       type        = "Service"
       identifiers = ["lambda.amazonaws.com"]
@@ -90,6 +134,7 @@ data "aws_iam_policy_document" "sfn_assume" {
   statement {
     actions = ["sts:AssumeRole"]
     effect  = "Allow"
+
     principals {
       type        = "Service"
       identifiers = ["states.amazonaws.com"]
@@ -103,30 +148,16 @@ resource "aws_iam_role" "sfn" {
   tags               = var.extra_tags
 }
 
-resource "aws_iam_role_policy" "sfn" {
-  role = aws_iam_role.sfn.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = "lambda:InvokeFunction"
-      Resource = aws_lambda_function.agent.arn
-    }]
-  })
-}
-
 data "aws_iam_policy_document" "agent" {
   statement {
-    effect = "Allow"
-    actions = [
-      "bedrock:InvokeModel",
-      "bedrock:InvokeModelWithResponseStream"
-    ]
-    resources = ["arn:aws:bedrock:*::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"]
+    sid       = "Bedrock"
+    effect    = "Allow"
+    actions   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+    resources = ["${data.aws_partition.current.partition}:bedrock:${var.aws_region}::foundation-model/${var.bedrock_model_id}"]
   }
 
   statement {
+    sid    = "DynamoDB"
     effect = "Allow"
     actions = [
       "dynamodb:PutItem",
@@ -144,30 +175,37 @@ data "aws_iam_policy_document" "agent" {
   }
 
   statement {
-    effect = "Allow"
-    actions = [
-      "sns:Publish"
-    ]
+    sid       = "Alerts"
+    effect    = "Allow"
+    actions   = ["sns:Publish"]
     resources = [aws_sns_topic.alerts.arn]
   }
 
   statement {
+    sid    = "Logs"
     effect = "Allow"
     actions = [
-      "logs:CreateLogGroup",
       "logs:CreateLogStream",
       "logs:PutLogEvents"
     ]
-    resources = ["arn:aws:logs:*:*:*"]
+    resources = ["${aws_cloudwatch_log_group.agent.arn}:*"]
+  }
+
+  dynamic "statement" {
+    for_each = local.github_secret_arn != "" ? [local.github_secret_arn] : []
+    content {
+      sid       = "GitHubSecret"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [statement.value]
+    }
   }
 
   statement {
-    effect = "Allow"
-    actions = [
-      "states:StartExecution",
-      "states:DescribeExecution"
-    ]
-    resources = [aws_sfn_state_machine.agent.arn]
+    sid       = "StartWorkflow"
+    effect    = "Allow"
+    actions   = ["states:StartExecution"]
+    resources = [local.state_machine_arn]
   }
 }
 
@@ -176,64 +214,105 @@ resource "aws_iam_role_policy" "agent" {
   policy = data.aws_iam_policy_document.agent.json
 }
 
-# -----------------------------------------------------------
-# Lambda — Agent handler (receives Jenkins webhook)
-# -----------------------------------------------------------
+resource "aws_iam_role_policy" "sfn" {
+  role = aws_iam_role.sfn.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = aws_lambda_function.agent.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogDelivery", "logs:GetLogDelivery", "logs:UpdateLogDelivery", "logs:DeleteLogDelivery", "logs:ListLogDeliveries", "logs:PutResourcePolicy", "logs:DescribeResourcePolicies", "logs:DescribeLogGroups"]
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.sfn.arn}:*"
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "agent" {
+  name              = "/aws/lambda/${local.lambda_name}"
+  retention_in_days = 14
+  tags              = var.extra_tags
+}
+
+resource "aws_cloudwatch_log_group" "sfn" {
+  name              = "/aws/vendedlogs/states/${local.state_machine_name}"
+  retention_in_days = 14
+  tags              = var.extra_tags
+}
+
+data "archive_file" "agent" {
+  type        = "zip"
+  source_file = "${path.module}/lambdas/agent-handler.py"
+  output_path = "${path.module}/agent-handler.generated.zip"
+}
+
 resource "aws_lambda_function" "agent" {
-  filename      = "${path.module}/lambdas/agent-handler.zip"
-  function_name = "${var.project_name}-${var.environment}-cicd-agent"
-  role          = aws_iam_role.agent.arn
-  handler       = "agent-handler.lambda_handler"
-  runtime       = "python3.12"
-  timeout       = 300
-  memory_size   = 512
+  function_name    = local.lambda_name
+  filename         = data.archive_file.agent.output_path
+  source_code_hash = data.archive_file.agent.output_base64sha256
+  role             = aws_iam_role.agent.arn
+  handler          = "agent-handler.lambda_handler"
+  runtime          = "python3.12"
+  timeout          = 300
+  memory_size      = 512
+  architectures    = ["x86_64"]
 
   environment {
     variables = {
-      SNS_TOPIC_ARN     = aws_sns_topic.alerts.arn
-      ISSUES_TABLE      = aws_dynamodb_table.issues.name
-      PREDICTIONS_TABLE = aws_dynamodb_table.predictions.name
-      BEDROCK_MODEL_ID  = var.bedrock_model_id
-      GITHUB_TOKEN      = var.github_token
-      GITHUB_OWNER      = var.github_owner
-      GITHUB_REPO       = var.github_repo
-      STATE_MACHINE_ARN  = aws_sfn_state_machine.agent.arn
-      NOTIFY_EMAIL      = var.alert_email
+      SNS_TOPIC_ARN           = aws_sns_topic.alerts.arn
+      ISSUES_TABLE            = aws_dynamodb_table.issues.name
+      PREDICTIONS_TABLE       = aws_dynamodb_table.predictions.name
+      BEDROCK_MODEL_ID        = var.bedrock_model_id
+      GITHUB_SECRET_ARN       = local.github_secret_arn
+      GITHUB_OWNER            = var.github_owner
+      GITHUB_REPO             = var.github_repo
+      GITHUB_BASE_BRANCH      = var.github_base_branch
+      GITHUB_AUTO_FIX_ENABLED = tostring(var.github_auto_fix_enabled)
+      STATE_MACHINE_ARN       = local.state_machine_arn
     }
   }
 
   tags = var.extra_tags
-}
 
-# -----------------------------------------------------------
-# Lambda URL — Jenkins webhook endpoint
-# -----------------------------------------------------------
-resource "aws_lambda_function_url" "webhook" {
-  function_name      = aws_lambda_function.agent.function_name
-  authorization_type = "NONE"
+  depends_on = [
+    aws_cloudwatch_log_group.agent,
+    aws_iam_role_policy.agent
+  ]
 
-  cors {
-    allow_origins = ["*"]
-    allow_methods = ["POST"]
-    allow_headers = ["*"]
+  lifecycle {
+    precondition {
+      condition     = !var.github_auto_fix_enabled || (var.github_token != "" && trimspace(var.github_owner) != "" && trimspace(var.github_repo) != "")
+      error_message = "github_auto_fix_enabled requires github_token, github_owner, and github_repo."
+    }
   }
 }
 
-resource "aws_lambda_permission" "webhook" {
-  statement_id           = "AllowPublicInvoke"
-  action                 = "lambda:InvokeFunctionUrl"
-  function_name          = aws_lambda_function.agent.function_name
-  principal              = "*"
-  function_url_auth_type = "NONE"
+resource "aws_lambda_function_url" "webhook" {
+  function_name      = aws_lambda_function.agent.function_name
+  authorization_type = "AWS_IAM"
 }
 
-# -----------------------------------------------------------
-# Step Functions — pipeline workflow
-# -----------------------------------------------------------
 resource "aws_sfn_state_machine" "agent" {
-  name     = "${var.project_name}-${var.environment}-cicd-agent-workflow"
+  name     = local.state_machine_name
   role_arn = aws_iam_role.sfn.arn
   type     = "STANDARD"
+
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.sfn.arn}:*"
+    include_execution_data = false
+    level                  = "ALL"
+  }
 
   definition = jsonencode({
     Comment = "AI CI/CD Agent Pipeline"
@@ -246,9 +325,14 @@ resource "aws_sfn_state_machine" "agent" {
           "action.$"    = "States.Format('{}', 'precheck')"
           "code_diff.$" = "$.code_diff"
           "build_log.$" = "$.build_log"
+          "build_id.$"  = "$.build_id"
+          "pipeline.$"  = "$.pipeline"
+          "status.$"    = "$.status"
+          "branch.$"    = "$.branch"
+          "commit.$"    = "$.commit"
         }
         ResultPath = "$.precheck_result"
-        Next = "AnalyzeBuild"
+        Next       = "AnalyzeBuild"
         Catch = [{
           ErrorEquals = ["States.ALL"]
           Next        = "NotifyDevOps"
@@ -262,9 +346,11 @@ resource "aws_sfn_state_machine" "agent" {
           "precheck_result.$" = "$.precheck_result"
           "stage.$"           = "$.stage"
           "build_log.$"       = "$.build_log"
+          "build_id.$"        = "$.build_id"
+          "pipeline.$"        = "$.pipeline"
         }
         ResultPath = "$.analysis"
-        Next = "PredictIssues"
+        Next       = "PredictIssues"
         Catch = [{
           ErrorEquals = ["States.ALL"]
           Next        = "NotifyDevOps"
@@ -277,9 +363,11 @@ resource "aws_sfn_state_machine" "agent" {
           "action.$"   = "States.Format('{}', 'predict')"
           "history.$"  = "$.history"
           "analysis.$" = "$.analysis"
+          "build_id.$" = "$.build_id"
+          "pipeline.$" = "$.pipeline"
         }
         ResultPath = "$.predictions"
-        Next = "SelfFix"
+        Next       = "SelfFix"
         Catch = [{
           ErrorEquals = ["States.ALL"]
           Next        = "ClassifyIssues"
@@ -292,9 +380,10 @@ resource "aws_sfn_state_machine" "agent" {
           "action.$"         = "States.Format('{}', 'self_fix')"
           "fixable_issues.$" = "$.predictions.fixable"
           "code_diff.$"      = "$.code_diff"
+          "build_id.$"       = "$.build_id"
         }
         ResultPath = "$.fix_result"
-        Next = "ClassifyIssues"
+        Next       = "ClassifyIssues"
         Catch = [{
           ErrorEquals = ["States.ALL"]
           Next        = "ClassifyIssues"
@@ -306,9 +395,18 @@ resource "aws_sfn_state_machine" "agent" {
         Parameters = {
           "action.$"           = "States.Format('{}', 'classify')"
           "remaining_issues.$" = "$.remaining_issues"
+          "precheck_result.$"  = "$.precheck_result"
+          "analysis.$"         = "$.analysis"
+          "fix_result.$"       = "$.fix_result"
+          "build_id.$"         = "$.build_id"
+          "pipeline.$"         = "$.pipeline"
         }
         ResultPath = "$.classification"
-        Next = "NotifyDevOps"
+        Next       = "NotifyDevOps"
+        Catch = [{
+          ErrorEquals = ["States.ALL"]
+          Next        = "NotifyDevOps"
+        }]
       }
       NotifyDevOps = {
         Type     = "Task"
@@ -323,22 +421,33 @@ resource "aws_sfn_state_machine" "agent" {
   })
 
   tags = var.extra_tags
+
+  depends_on = [
+    aws_cloudwatch_log_group.sfn,
+    aws_iam_role_policy.sfn
+  ]
 }
 
-# -----------------------------------------------------------
-# CloudWatch — schedule to retrain prediction model weekly
-# -----------------------------------------------------------
 resource "aws_cloudwatch_event_rule" "retrain" {
+  count               = var.enable_retrain ? 1 : 0
   name                = "${var.project_name}-${var.environment}-ai-retrain"
   description         = "Weekly retrain of prediction data"
   schedule_expression = "cron(0 2 ? * SUN *)"
-  state               = "DISABLED"
+  state               = "ENABLED"
 }
 
 resource "aws_cloudwatch_event_target" "retrain" {
-  rule = aws_cloudwatch_event_rule.retrain.name
-  arn  = aws_lambda_function.agent.arn
-  input = jsonencode({
-    action = "retrain"
-  })
+  count = var.enable_retrain ? 1 : 0
+  rule  = aws_cloudwatch_event_rule.retrain[0].name
+  arn   = aws_lambda_function.agent.arn
+  input = jsonencode({ action = "retrain" })
+}
+
+resource "aws_lambda_permission" "retrain" {
+  count         = var.enable_retrain ? 1 : 0
+  statement_id  = "AllowEventBridgeRetrain"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.agent.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.retrain[0].arn
 }

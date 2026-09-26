@@ -1,136 +1,160 @@
 #!/bin/bash
-set -euxo pipefail
-
-# ============================================================
-# SonarQube Setup Script
-# ============================================================
+set -euo pipefail
 
 SONAR_VERSION="${sonarqube_version}"
-SONAR_USER="sonar"
-SONAR_HOME="/opt/sonarqube"
-SONAR_DB="sonarqube"
-SONAR_DB_USER="sonar"
-SONAR_DB_PASS="sonar_password"
+SONAR_SHA256="${sonarqube_sha256}"
+SONAR_USER=sonar
+SONAR_HOME=/opt/sonarqube
+SONAR_DB=sonarqube
+SONAR_DB_USER=sonar
+SONAR_STATE_DIR=/var/lib/sonarqube
 
-exec > /var/log/sonar-setup.log 2>&1
+exec > >(tee -a /var/log/sonar-setup.log) 2>&1
 
-# -----------------------------------------------------------
-# System packages
-# -----------------------------------------------------------
+verify_sha256() {
+  local file="$1" expected="$2" actual
+  if [ -z "$expected" ]; then
+    echo "No expected sha256 supplied for $file; set sonarqube_sha256 to pin this download" >&2
+    return 0
+  fi
+  actual=$(openssl dgst -sha256 "$file" | awk '{print $NF}')
+  if [ "$actual" != "$expected" ]; then
+    echo "Checksum mismatch for $file: expected sha256=$expected, got $actual" >&2
+    exit 1
+  fi
+  echo "Verified sha256 for $file"
+}
+
 dnf update -y
 dnf install -y \
-  curl \
-  wget \
-  unzip \
-  git \
-  jq \
-  java-17-amazon-corretto-devel \
   amazon-cloudwatch-agent \
-  awscli
+  awscli \
+  curl \
+  git \
+  java-17-amazon-corretto-devel \
+  jq \
+  openssl \
+  postgresql15-server \
+  postgresql15-contrib \
+  unzip \
+  wget
 
-# -----------------------------------------------------------
-# PostgreSQL 15
-# -----------------------------------------------------------
-dnf install -y postgresql15-server postgresql15-contrib
-/usr/bin/postgresql-15-setup initdb
+install -d -m 0700 "$SONAR_STATE_DIR"
+if [ -f "$SONAR_STATE_DIR/db_password" ]; then
+  SONAR_DB_PASS=$(cat "$SONAR_STATE_DIR/db_password")
+else
+  SONAR_DB_PASS=$(openssl rand -hex 32)
+  printf '%s\n' "$SONAR_DB_PASS" > "$SONAR_STATE_DIR/db_password"
+fi
+if [ -f "$SONAR_STATE_DIR/admin_password" ]; then
+  SONAR_ADMIN_PASS=$(cat "$SONAR_STATE_DIR/admin_password")
+else
+  SONAR_ADMIN_PASS=$(openssl rand -hex 24)
+  printf '%s\n' "$SONAR_ADMIN_PASS" > "$SONAR_STATE_DIR/admin_password"
+fi
 
-# Configure PostgreSQL authentication
+if [ ! -s /var/lib/pgsql/15/data/PG_VERSION ]; then
+  /usr/bin/postgresql-15-setup initdb
+fi
+systemctl enable --now postgresql-15
+
 cat > /var/lib/pgsql/15/data/pg_hba.conf << 'PGHBA'
-# TYPE  DATABASE        USER            ADDRESS                 METHOD
 local   all             all                                     peer
-host    all             all             127.0.0.1/32            md5
-host    all             all             ::1/128                 md5
-host    all             all             10.0.0.0/8              md5
+host    all             all             127.0.0.1/32            scram-sha-256
+host    all             all             ::1/128                 scram-sha-256
 PGHBA
 
-systemctl enable postgresql-15
-systemctl start postgresql-15
+systemctl restart postgresql-15
+if ! su - postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='$SONAR_DB_USER';\"" | grep -q 1; then
+  su - postgres -c "psql --set ON_ERROR_STOP=1 -c \"CREATE USER $SONAR_DB_USER WITH PASSWORD '$SONAR_DB_PASS';\""
+else
+  su - postgres -c "psql --set ON_ERROR_STOP=1 -c \"ALTER USER $SONAR_DB_USER WITH PASSWORD '$SONAR_DB_PASS';\""
+fi
+if ! su - postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='$SONAR_DB';\"" | grep -q 1; then
+  su - postgres -c "createdb -O $SONAR_DB_USER $SONAR_DB"
+fi
+su - postgres -c "psql --set ON_ERROR_STOP=1 -d $SONAR_DB -c \"GRANT ALL ON SCHEMA public TO $SONAR_DB_USER;\""
 
-# Create SonarQube database and user
-su - postgres -c "psql -c \"CREATE USER $SONAR_DB_USER WITH PASSWORD '$SONAR_DB_PASS';\""
-su - postgres -c "psql -c \"CREATE DATABASE $SONAR_DB OWNER $SONAR_DB_USER;\""
-su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $SONAR_DB TO $SONAR_DB_USER;\""
-su - postgres -c "psql -d $SONAR_DB -c \"GRANT ALL ON SCHEMA public TO $SONAR_DB_USER;\""
+useradd --create-home --home-dir "$SONAR_HOME" --shell /bin/bash "$SONAR_USER" || true
+if [ ! -x "$SONAR_HOME/bin/linux-x86-64/sonar.sh" ]; then
+  curl -fsSL "https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-$SONAR_VERSION.zip" -o /tmp/sonarqube.zip
+  verify_sha256 /tmp/sonarqube.zip "$SONAR_SHA256"
+  unzip -q /tmp/sonarqube.zip -d /opt
+  mv "/opt/sonarqube-$SONAR_VERSION" "$SONAR_HOME"
+fi
 
-# -----------------------------------------------------------
-# SonarQube
-# -----------------------------------------------------------
-useradd -m -d $SONAR_HOME -s /bin/bash $SONAR_USER
-
-curl -fsSL "https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-$SONAR_VERSION.zip" \
-  -o /tmp/sonarqube.zip
-
-unzip -q /tmp/sonarqube.zip -d /opt
-mv "/opt/sonarqube-$SONAR_VERSION" $SONAR_HOME
-
-# SonarQube configuration
-cat > $SONAR_HOME/conf/sonar.properties << 'SONARPROP'
-# Database
-sonar.jdbc.username=sonar
-sonar.jdbc.password=sonar_password
-sonar.jdbc.url=jdbc:postgresql://localhost:5432/sonarqube?useUnicode=true&characterEncoding=utf8&rewriteBatchedStatements=true&useConfigs=maxPerformance
-
-# Web server
+cat > "$SONAR_HOME/conf/sonar.properties" << SONARPROPERTIES
+sonar.jdbc.username=$SONAR_DB_USER
+sonar.jdbc.password=$SONAR_DB_PASS
+sonar.jdbc.url=jdbc:postgresql://localhost:5432/$SONAR_DB?currentSchema=public
 sonar.web.host=0.0.0.0
 sonar.web.port=9000
 sonar.web.javaAdditionalOpts=-server
-
-# Elasticsearch
 sonar.search.javaOpts=-Xmx512m -Xms512m -XX:+HeapDumpOnOutOfMemoryError
-
-# Update center
 sonar.updatecenter.activate=false
-
-# HTTP compression
 sonar.web.compression=true
-SONARPROP
+SONARPROPERTIES
 
-# Systemd service
-cat > /etc/systemd/system/sonarqube.service << SONARSVC
+cat > /etc/systemd/system/sonarqube.service << SONARSERVICE
 [Unit]
 Description=SonarQube service
-After=syslog.target network.target postgresql-15.service
+After=network.target postgresql-15.service
 
 [Service]
 Type=forking
 ExecStart=$SONAR_HOME/bin/linux-x86-64/sonar.sh start
 ExecStop=$SONAR_HOME/bin/linux-x86-64/sonar.sh stop
 ExecReload=$SONAR_HOME/bin/linux-x86-64/sonar.sh restart
-User=sonar
-Group=sonar
+User=$SONAR_USER
+Group=$SONAR_USER
 Restart=always
-LimitNOFILE=65536
-LimitNPROC=4096
+LimitNOFILE=131072
+LimitNPROC=8192
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-SONARSVC
+SONARSERVICE
 
-chown -R $SONAR_USER:$SONAR_USER $SONAR_HOME
-
-# Kernel tuning for SonarQube
-cat >> /etc/sysctl.conf << 'SYSCTL'
+chown -R "$SONAR_USER:$SONAR_USER" "$SONAR_HOME"
+cat > /etc/sysctl.d/99-sonarqube.conf << 'SYSCTL'
 vm.max_map_count=524288
 fs.file-max=131072
 SYSCTL
-
-sysctl -p
-
-# Increase ulimits
-cat >> /etc/security/limits.conf << 'LIMITS'
-sonar   -   nofile   65536
-sonar   -   nproc    4096
+sysctl --system >/dev/null
+cat > /etc/security/limits.d/99-sonarqube.conf << 'LIMITS'
+sonar - nofile 131072
+sonar - nproc 8192
 LIMITS
 
 systemctl daemon-reload
-systemctl enable sonarqube
-systemctl start sonarqube
+systemctl enable --now sonarqube
 
-# -----------------------------------------------------------
-# CloudWatch Agent
-# -----------------------------------------------------------
+for attempt in $(seq 1 60); do
+  if curl -fsS http://127.0.0.1:9000/api/system/status >/dev/null; then
+    break
+  fi
+  if [ "$attempt" -eq 60 ]; then
+    exit 1
+  fi
+  sleep 5
+done
+if [ ! -f "$SONAR_STATE_DIR/admin_initialized" ]; then
+  curl -fsS -u admin:admin -X POST \
+    -d "login=admin" \
+    -d "previousPassword=admin" \
+    -d "password=$SONAR_ADMIN_PASS" \
+    http://127.0.0.1:9000/api/users/change_password >/dev/null
+  touch "$SONAR_STATE_DIR/admin_initialized"
+fi
+
+install -d -o "$SONAR_USER" -g "$SONAR_USER" -m 0700 "$SONAR_HOME/.credentials"
+printf 'username=admin\npassword=%s\n' "$SONAR_ADMIN_PASS" > "$SONAR_HOME/.credentials/admin"
+chown "$SONAR_USER:$SONAR_USER" "$SONAR_HOME/.credentials/admin"
+chmod 0600 "$SONAR_HOME/.credentials/admin"
+chmod 0600 "$SONAR_STATE_DIR/db_password" "$SONAR_STATE_DIR/admin_password"
+
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CONF'
 {
   "agent": {
@@ -178,18 +202,7 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CONF
 }
 CONF
 
-systemctl enable amazon-cloudwatch-agent
-systemctl start amazon-cloudwatch-agent
-
-# -----------------------------------------------------------
-# Cleanup
-# -----------------------------------------------------------
+systemctl enable --now amazon-cloudwatch-agent
 dnf clean all
-rm -rf /tmp/sonarqube.zip
-
-# Wait for SonarQube to be ready
-sleep 30
-
-echo "SonarQube setup complete!"
-echo "URL: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):9000"
-echo "Default login: admin / admin"
+rm -f /tmp/sonarqube.zip
+logger -t sonarqube "SonarQube is configured; credentials are stored on the instance under /opt/sonarqube/.credentials"

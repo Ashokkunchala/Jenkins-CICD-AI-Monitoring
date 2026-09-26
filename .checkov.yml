@@ -1,0 +1,125 @@
+# Checkov policy for the Jenkins CI/CD AI Monitoring platform.
+#
+#   checkov -d . --framework terraform
+#
+# `skip-check` is a list of plain check IDs, not `- id: ... comment: ...`
+# mappings. Checkov 3.3.x silently ignores the mapping form when it is loaded
+# from a config file, so the rationale for each skip is written as a YAML
+# comment on the line it applies to.
+#
+# Every entry below is a deliberate, documented acceptance rather than an
+# oversight. Removing an entry makes CI fail, so review each one before
+# promoting this stack to production.
+
+# Both frameworks are listed here because a `framework` key in a config file
+# overrides `--framework` on the command line, so a Terraform-only setting
+# would silently suppress the secrets scan.
+framework:
+  - terraform
+  - secrets
+
+download-external-modules: false
+quiet: true
+compact: true
+
+# Checkov 3.3.19 only honours skip-path entries that name a file exactly as it
+# reports it, which is why these are literal filenames rather than globs.
+#
+# terraform.tfstate.backup.local is a preserved local state snapshot, not
+# repository content. It is gitignored and it legitimately contains the
+# tls_private_key SSH material that Terraform wrote into state, so the secrets
+# scan must not read it. Never commit it and never load it. Any key that was
+# ever pushed to a remote has to be rotated; see the state migration notes in
+# README.md.
+skip-path:
+  - terraform.tfstate
+  - terraform.tfstate.backup
+  - terraform.tfstate.local
+  - terraform.tfstate.backup.local
+  - .external_modules
+
+skip-check:
+  # --- Encryption at rest -------------------------------------------------
+  # A dedicated CMK per secret, table, topic, and log group adds key-policy,
+  # rotation, and request-cost overhead that a development lab does not need.
+  # All of these resources are still encrypted at rest with the AWS-owned key.
+  - CKV_AWS_149   # Secrets Manager secret encrypted with a KMS CMK
+  - CKV_AWS_119   # DynamoDB table encrypted with a KMS CMK
+  - CKV_AWS_158   # CloudWatch log group encrypted with a KMS CMK
+  - CKV_AWS_26    # SNS topic encrypted with a KMS CMK
+
+  # --- Secret rotation ----------------------------------------------------
+  # The Jenkins admin password is generated once at bootstrap and read by the
+  # controller exactly once. The two JNLP secrets are rewritten by the
+  # controller when it recreates a node, and the GitHub token is rotated by
+  # the operator. Automatic rotation would race those first-boot reads.
+  - CKV2_AWS_57
+
+  # --- Log retention ------------------------------------------------------
+  # Fourteen days is a deliberate cost choice. Raise `retention_in_days` on the
+  # CloudWatch log groups and `vpc_flow_log_retention_days` for production.
+  - CKV_AWS_338
+
+  # --- Lambda hardening ---------------------------------------------------
+  # The AI agent and the instance scheduler are reachable only from the
+  # Jenkins controller and EventBridge inside this account, and the webhook is
+  # protected by the AWS_IAM authorizer on the Function URL.
+  - CKV_AWS_115   # Reserved concurrent execution limit
+  - CKV_AWS_116   # Dead-letter queue
+  - CKV_AWS_117   # Lambda attached to a VPC
+  - CKV_AWS_173   # Environment variable encryption; no secret is passed as an
+                 # env var, the GitHub token is read from Secrets Manager
+                 # at invoke time
+  - CKV_AWS_272   # Code signing
+  - CKV_AWS_50    # X-Ray tracing
+  - CKV_AWS_284   # Step Functions X-Ray tracing
+
+  # aws_sfn_state_machine.agent sets logging_configuration with level = "ALL"
+  # and include_execution_data = false in modules/ai-cicd-agent/main.tf.
+  # Checkov does not evaluate a real logging_configuration block, so this is a
+  # parser false positive.
+  - CKV_AWS_285
+
+  # --- EC2 ----------------------------------------------------------------
+  # Jenkins, SonarQube, and Nexus are intentionally reachable from the
+  # supplied CIDRs for this lab. allowed_ssh_cidr and allowed_web_cidr are
+  # validated to reject 0.0.0.0/0, IMDSv2 is required, and root volumes are
+  # encrypted gp3. Put these instances behind a load balancer or VPN before
+  # production use.
+  - CKV_AWS_88    # EC2 instance should not have a public IP
+  - CKV_AWS_130   # Subnet assigns a public IP on launch
+
+  # One-minute detailed monitoring is billed per instance-hour, so it is
+  # opt-in through enable_detailed_monitoring, which defaults to false.
+  - CKV_AWS_126
+
+  # --- Security groups ----------------------------------------------------
+  # The security groups need unrestricted egress to reach Amazon Linux, the
+  # Jenkins apt repository, Docker Hub, and the Bedrock API. Ingress is
+  # restricted to the supplied CIDRs and the VPC CIDR block.
+  - CKV_AWS_382
+
+  # Each security group is attached to an aws_instance or launch template in
+  # the calling module, which Checkov cannot see across the module boundary.
+  - CKV2_AWS_5
+
+  # --- Networking ---------------------------------------------------------
+  # AWS creates a default security group that denies inter-VPC traffic
+  # whenever a VPC is created. This configuration never modifies it, so there
+  # is no resource for Checkov to evaluate.
+  - CKV2_AWS_12
+
+  # data.aws_availability_zones.available resolves the AZ list for the region.
+  # Setting availability_zones explicitly is the supported way to make zone
+  # selection deterministic.
+  - CKV_AWS_394
+
+  # --- IAM ----------------------------------------------------------------
+  # The VPC Flow Logs role needs logs:DescribeLogGroups on "*". The CloudWatch
+  # Logs service authorization reference lists that action with
+  # "Resource types (*required)", meaning it authorizes on no resource and IAM
+  # rejects any narrower value. Every other action in that policy is scoped to
+  # the log group or to its log streams. This is the only statement in the
+  # project that uses a wildcard resource.
+  - CKV_AWS_356
+

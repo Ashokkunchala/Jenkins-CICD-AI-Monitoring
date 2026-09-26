@@ -1,6 +1,7 @@
 output "webhook_url" {
-  description = "Jenkins webhook URL for the AI agent"
+  description = "IAM-protected Jenkins webhook URL for the AI agent"
   value       = aws_lambda_function_url.webhook.function_url
+  sensitive   = true
 }
 
 output "sns_topic_arn" {
@@ -16,6 +17,11 @@ output "state_machine_arn" {
 output "lambda_function_name" {
   description = "Lambda function name"
   value       = aws_lambda_function.agent.function_name
+}
+
+output "lambda_function_arn" {
+  description = "Lambda function ARN"
+  value       = aws_lambda_function.agent.arn
 }
 
 output "issues_table" {

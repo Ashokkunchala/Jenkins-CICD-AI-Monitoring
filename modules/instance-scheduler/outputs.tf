@@ -5,5 +5,5 @@ output "lambda_function_name" {
 
 output "schedule_tag" {
   description = "Tag to apply to instances for scheduling"
-  value       = local.schedule_tag
+  value       = "${var.project_name}-${var.environment}-schedule"
 }
