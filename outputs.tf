@@ -1,16 +1,26 @@
 output "jenkins_master_public_ip" {
-  description = "Public IP of the Jenkins controller"
+  description = "Public IP of the Jenkins controller when non-production public mode is enabled"
   value       = module.jenkins_master.jenkins_master_public_ip
 }
 
+output "jenkins_master_private_ip" {
+  description = "Private IP of the Jenkins controller"
+  value       = module.jenkins_master.jenkins_master_private_ip
+}
+
 output "jenkins_master_public_dns" {
-  description = "Public DNS of the Jenkins controller"
+  description = "Public DNS of the Jenkins controller when public addressing is enabled"
   value       = module.jenkins_master.jenkins_master_public_dns
 }
 
 output "jenkins_master_url" {
-  description = "Jenkins controller URL"
-  value       = "http://${module.jenkins_master.jenkins_master_public_ip}:8080"
+  description = "Jenkins URL; production mode uses the ALB URL"
+  value       = var.enable_jenkins_alb ? try(module.jenkins_alb[0].jenkins_url, null) : "http://${module.jenkins_master.jenkins_master_public_ip}:8080"
+}
+
+output "jenkins_alb_dns_name" {
+  description = "Production Jenkins ALB DNS name"
+  value       = var.enable_jenkins_alb ? try(module.jenkins_alb[0].alb_dns_name, null) : null
 }
 
 output "jenkins_admin_secret_arn" {
@@ -42,23 +52,23 @@ output "jenkins_agent_arm64_asg_name" {
 }
 
 output "sonarqube_public_ip" {
-  description = "Public IP of SonarQube"
+  description = "Public IP of SonarQube in non-production public mode"
   value       = module.sonarqube.sonarqube_public_ip
 }
 
 output "sonarqube_url" {
-  description = "SonarQube URL"
-  value       = "http://${module.sonarqube.sonarqube_public_ip}:9000"
+  description = "SonarQube URL in non-production public mode"
+  value       = var.enable_jenkins_alb ? null : "http://${module.sonarqube.sonarqube_public_ip}:9000"
 }
 
 output "nexus_public_ip" {
-  description = "Public IP of Nexus Repository"
+  description = "Public IP of Nexus Repository in non-production public mode"
   value       = module.nexus.nexus_public_ip
 }
 
 output "nexus_url" {
-  description = "Nexus Repository URL"
-  value       = "http://${module.nexus.nexus_public_ip}:8081"
+  description = "Nexus URL in non-production public mode"
+  value       = var.enable_jenkins_alb ? null : "http://${module.nexus.nexus_public_ip}:8081"
 }
 
 output "key_pair_names" {
