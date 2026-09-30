@@ -5,48 +5,15 @@ data "aws_route53_zone" "selected" {
 }
 
 locals {
-  zone_id          = var.route53_zone_id != "" ? var.route53_zone_id : try(data.aws_route53_zone.selected[0].zone_id, "")
-  certificate_arn  = var.acm_certificate_arn != "" ? var.acm_certificate_arn : try(aws_acm_certificate.jenkins[0].arn, "")
-  hostname         = var.domain_name != "" ? var.domain_name : ""
-}
-
-resource "aws_security_group" "alb" {
-  name        = "${var.project_name}-${var.environment}-jenkins-alb-sg"
-  description = "Public ALB for Jenkins"
-  vpc_id      = var.vpc_id
-
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = var.allowed_client_cidrs
-  }
-
-  ingress {
-    description = "HTTP for redirect and certificate validation"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = var.allowed_client_cidrs
-  }
-
-  egress {
-    description = "ALB outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = { Name = "${var.project_name}-${var.environment}-jenkins-alb-sg" }
+  zone_id         = var.route53_zone_id != "" ? var.route53_zone_id : try(data.aws_route53_zone.selected[0].zone_id, "")
+  certificate_arn = var.acm_certificate_arn != "" ? var.acm_certificate_arn : try(aws_acm_certificate.jenkins[0].arn, "")
 }
 
 resource "aws_lb" "jenkins" {
   name                       = substr("${var.project_name}-${var.environment}-jenkins", 0, 32)
   internal                   = false
   load_balancer_type         = "application"
-  security_groups            = [aws_security_group.alb.id]
+  security_groups            = [var.alb_security_group_id]
   subnets                    = var.public_subnet_ids
   enable_deletion_protection = var.enable_deletion_protection
   drop_invalid_header_fields = true
