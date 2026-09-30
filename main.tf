@@ -91,13 +91,13 @@ resource "aws_security_group" "jenkins_alb" {
 module "security_groups" {
   source = "./modules/security-groups"
 
-  vpc_id              = module.networking.vpc_id
-  vpc_cidr_block      = module.networking.vpc_cidr
-  allowed_ssh_cidr    = var.allowed_ssh_cidr
-  allowed_web_cidr    = local.web_cidr
-  jenkins_alb_sg_id   = try(aws_security_group.jenkins_alb[0].id, "")
-  environment         = var.environment
-  project_name        = var.project_name
+  vpc_id            = module.networking.vpc_id
+  vpc_cidr_block    = module.networking.vpc_cidr
+  allowed_ssh_cidr  = var.allowed_ssh_cidr
+  allowed_web_cidr  = local.web_cidr
+  jenkins_alb_sg_id = try(aws_security_group.jenkins_alb[0].id, "")
+  environment       = var.environment
+  project_name      = var.project_name
 }
 
 module "ai_cicd_agent" {
@@ -145,6 +145,8 @@ module "jenkins_master" {
   ai_lambda_function_arn     = module.ai_cicd_agent.lambda_function_arn
   extra_tags                 = local.schedule_tag
   enable_detailed_monitoring = var.enable_detailed_monitoring
+  associate_public_ip_address = !var.enable_jenkins_alb
+  create_eip                   = !var.enable_jenkins_alb
   ami_id                     = var.ami_id
   maven_sha512               = var.maven_sha512
   gradle_sha256              = var.gradle_sha256
@@ -156,19 +158,19 @@ module "jenkins_alb" {
   count  = var.enable_jenkins_alb ? 1 : 0
   source = "./modules/jenkins-alb"
 
-  project_name              = var.project_name
-  environment               = var.environment
-  vpc_id                    = module.networking.vpc_id
-  public_subnet_ids         = module.networking.public_subnet_ids
-  jenkins_private_ip        = module.jenkins_master.jenkins_master_private_ip
-  alb_security_group_id     = aws_security_group.jenkins_alb[0].id
-  enable_https              = var.jenkins_alb_enable_https
-  enable_dns                = var.jenkins_alb_enable_dns
-  domain_name               = var.jenkins_domain_name
-  route53_zone_id           = var.jenkins_route53_zone_id
-  acm_certificate_arn       = var.jenkins_acm_certificate_arn
+  project_name               = var.project_name
+  environment                = var.environment
+  vpc_id                     = module.networking.vpc_id
+  public_subnet_ids          = module.networking.public_subnet_ids
+  jenkins_private_ip         = module.jenkins_master.jenkins_master_private_ip
+  alb_security_group_id      = aws_security_group.jenkins_alb[0].id
+  enable_https               = var.jenkins_alb_enable_https
+  enable_dns                 = var.jenkins_alb_enable_dns
+  domain_name                = var.jenkins_domain_name
+  route53_zone_id            = var.jenkins_route53_zone_id
+  acm_certificate_arn        = var.jenkins_acm_certificate_arn
   enable_deletion_protection = var.jenkins_alb_deletion_protection
-  access_logs_bucket        = var.jenkins_alb_access_logs_bucket
+  access_logs_bucket         = var.jenkins_alb_access_logs_bucket
 
   depends_on = [module.jenkins_master]
 }
