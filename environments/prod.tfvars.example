@@ -1,0 +1,45 @@
+# Production example. Replace every value marked REPLACE_ME.
+aws_region  = "us-east-1"
+environment = "prod"
+project_name = "cicd-platform"
+
+# Explicit multi-AZ production layout.
+availability_zones   = ["us-east-1a", "us-east-1b"]
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24"]
+enable_nat_gateway   = true
+
+enable_instance_scheduler = false
+enable_detailed_monitoring = true
+
+# Administration should be through a trusted network/VPN.
+allowed_ssh_cidr = "REPLACE_ME/32"
+allowed_web_cidr = "REPLACE_ME/32"
+ssh_public_key_path = "~/.ssh/jenkins-prod.pub"
+
+# Production Jenkins front door.
+enable_jenkins_alb = true
+jenkins_alb_allowed_client_cidrs = ["REPLACE_ME/32"]
+jenkins_alb_enable_https = true
+jenkins_alb_enable_dns   = true
+jenkins_domain_name      = "jenkins.example.com"
+jenkins_route53_zone_id  = "REPLACE_ME"
+jenkins_acm_certificate_arn = ""
+jenkins_alb_deletion_protection = true
+# Optional: supply an S3 bucket configured for ALB access logging.
+jenkins_alb_access_logs_bucket = ""
+
+# Pin AMIs in the real production tfvars.
+ami_id            = "REPLACE_ME"
+agent_amd64_ami_id = "REPLACE_ME"
+agent_arm64_ami_id = "REPLACE_ME"
+
+# Keep AI auto-fix disabled until the workflow has been validated in a non-production environment.
+agent_github_auto_fix_enabled = false
+enable_ai_retrain = false
+
+# The existing project validates downloaded binaries against these checksums.
+maven_sha512   = "REPLACE_ME_WITH_APPROVED_MAVEN_SHA512"
+gradle_sha256  = "REPLACE_ME_WITH_APPROVED_GRADLE_SHA256"
+sonarqube_sha256 = "REPLACE_ME_WITH_APPROVED_SONARQUBE_SHA256"
+nexus_sha256     = "REPLACE_ME_WITH_APPROVED_NEXUS_SHA256"
