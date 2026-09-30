@@ -1,11 +1,5 @@
-data "aws_route53_zone" "selected" {
-  count        = var.enable_dns && var.route53_zone_id == "" ? 1 : 0
-  name         = var.domain_name
-  private_zone = false
-}
-
 locals {
-  zone_id         = var.route53_zone_id != "" ? var.route53_zone_id : try(data.aws_route53_zone.selected[0].zone_id, "")
+  zone_id         = var.route53_zone_id
   certificate_arn = var.acm_certificate_arn != "" ? var.acm_certificate_arn : try(aws_acm_certificate.jenkins[0].arn, "")
 }
 
@@ -139,7 +133,7 @@ resource "aws_lb_listener" "https" {
 }
 
 resource "aws_route53_record" "jenkins" {
-  count   = var.enable_dns && local.zone_id != "" ? 1 : 0
+  count   = var.enable_dns ? 1 : 0
   zone_id = local.zone_id
   name    = var.domain_name
   type    = "A"
