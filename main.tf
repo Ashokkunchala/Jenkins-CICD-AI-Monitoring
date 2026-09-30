@@ -223,6 +223,8 @@ module "sonarqube" {
   extra_tags                 = local.schedule_tag
   enable_detailed_monitoring = var.enable_detailed_monitoring
   ami_id                     = var.ami_id
+  associate_public_ip_address = !var.enable_jenkins_alb
+  create_eip                  = !var.enable_jenkins_alb
 
   depends_on = [module.networking, module.security_groups]
 }
@@ -242,6 +244,8 @@ module "nexus" {
   extra_tags                 = local.schedule_tag
   enable_detailed_monitoring = var.enable_detailed_monitoring
   ami_id                     = var.ami_id
+  associate_public_ip_address = !var.enable_jenkins_alb
+  create_eip                  = !var.enable_jenkins_alb
 
   depends_on = [module.networking, module.security_groups]
 }
