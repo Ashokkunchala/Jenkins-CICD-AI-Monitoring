@@ -1,0 +1,2 @@
+Training scenario: controlled regression.
+The Jenkinsfile deliberately fails after unit tests on this branch so the AI diagnostic flow can be exercised.
