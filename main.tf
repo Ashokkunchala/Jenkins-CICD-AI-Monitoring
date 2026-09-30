@@ -55,141 +55,49 @@ module "networking" {
   flow_log_retention_days = var.vpc_flow_log_retention_days
 }
 
+resource "aws_security_group" "jenkins_alb" {
+  count       = var.enable_jenkins_alb ? 1 : 0
+  name        = "${var.project_name}-${var.environment}-jenkins-alb-sg"
+  description = "Public ALB security group for Jenkins"
+  vpc_id      = module.networking.vpc_id
+
+  ingress {
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = var.jenkins_alb_allowed_client_cidrs
+  }
+
+  ingress {
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = var.jenkins_alb_allowed_client_cidrs
+  }
+
+  egress {
+    description = "ALB outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${var.project_name}-${var.environment}-jenkins-alb-sg" }
+}
+
 module "security_groups" {
   source = "./modules/security-groups"
 
-  vpc_id           = module.networking.vpc_id
-  vpc_cidr_block   = module.networking.vpc_cidr
-  allowed_ssh_cidr = var.allowed_ssh_cidr
-  allowed_web_cidr = local.web_cidr
-  environment      = var.environment
-  project_name     = var.project_name
-}
-
-module "jenkins_master" {
-  source = "./modules/jenkins-master"
-
-  environment       = var.environment
-  project_name      = var.project_name
-  vpc_id            = module.networking.vpc_id
-  subnet_id         = module.networking.public_subnet_ids[0]
-  security_group_id = module.security_groups.jenkins_master_sg_id
-  instance_type     = var.jenkins_master_instance_type
-  admin_user        = var.jenkins_admin_user
-  admin_password    = ""
-  admin_secret_arn  = aws_secretsmanager_secret.jenkins_admin.arn
-  jenkins_agent_secret_arns = {
-    amd64 = aws_secretsmanager_secret.jenkins_agent_amd64.arn
-    arm64 = aws_secretsmanager_secret.jenkins_agent_arm64.arn
-  }
-  ssh_public_key             = local.ssh_public_key
-  jenkins_agent_sg_id        = module.security_groups.jenkins_agent_sg_id
-  sonarqube_url              = module.sonarqube.sonarqube_private_ip != "" ? "http://${module.sonarqube.sonarqube_private_ip}:9000" : ""
-  nexus_url                  = module.nexus.nexus_private_ip != "" ? "http://${module.nexus.nexus_private_ip}:8081" : ""
-  aws_region                 = var.aws_region
-  ai_webhook_url             = module.ai_cicd_agent.webhook_url
-  ai_lambda_function_arn     = module.ai_cicd_agent.lambda_function_arn
-  extra_tags                 = local.schedule_tag
-  enable_detailed_monitoring = var.enable_detailed_monitoring
-  ami_id                     = var.ami_id
-  maven_sha512               = var.maven_sha512
-  gradle_sha256              = var.gradle_sha256
-
-  depends_on = [
-    module.networking,
-    module.security_groups,
-    module.ai_cicd_agent
-  ]
-}
-
-module "jenkins_agent" {
-  source = "./modules/jenkins-agent"
-
-  environment                = var.environment
-  project_name               = var.project_name
-  vpc_id                     = module.networking.vpc_id
-  subnet_ids                 = module.networking.public_subnet_ids
-  security_group_id          = module.security_groups.jenkins_agent_sg_id
-  aws_region                 = var.aws_region
-  agent_amd64_instance_types = var.agent_amd64_instance_types
-  agent_arm64_instance_types = var.agent_arm64_instance_types
-  min_target_capacity        = var.agent_min_target_capacity
-  max_target_capacity        = var.agent_max_target_capacity
-  spot_allocation_strategy   = var.agent_spot_allocation_strategy
-  jenkins_master_private_ip  = module.jenkins_master.jenkins_master_private_ip
-  jenkins_agent_secret_arns = {
-    amd64 = aws_secretsmanager_secret.jenkins_agent_amd64.arn
-    arm64 = aws_secretsmanager_secret.jenkins_agent_arm64.arn
-  }
-  ssh_public_key         = local.ssh_public_key
-  ai_lambda_function_arn = module.ai_cicd_agent.lambda_function_arn
-  extra_tags             = {}
-  amd64_ami_id           = var.agent_amd64_ami_id
-  arm64_ami_id           = var.agent_arm64_ami_id
-  maven_sha512           = var.maven_sha512
-  gradle_sha256          = var.gradle_sha256
-
-  depends_on = [
-    module.jenkins_master,
-    module.networking,
-    module.security_groups,
-    module.ai_cicd_agent
-  ]
-}
-
-module "sonarqube" {
-  source = "./modules/sonarqube"
-
-  environment                = var.environment
-  project_name               = var.project_name
-  vpc_id                     = module.networking.vpc_id
-  subnet_id                  = module.networking.public_subnet_ids[0]
-  security_group_id          = module.security_groups.sonarqube_sg_id
-  instance_type              = var.sonarqube_instance_type
-  sonarqube_version          = var.sonarqube_version
-  sonarqube_sha256           = var.sonarqube_sha256
-  ssh_public_key             = local.ssh_public_key
-  extra_tags                 = local.schedule_tag
-  enable_detailed_monitoring = var.enable_detailed_monitoring
-  ami_id                     = var.ami_id
-
-  depends_on = [
-    module.networking,
-    module.security_groups
-  ]
-}
-
-module "nexus" {
-  source = "./modules/nexus"
-
-  environment                = var.environment
-  project_name               = var.project_name
-  vpc_id                     = module.networking.vpc_id
-  subnet_id                  = module.networking.public_subnet_ids[0]
-  security_group_id          = module.security_groups.nexus_sg_id
-  instance_type              = var.nexus_instance_type
-  nexus_version              = var.nexus_version
-  nexus_sha256               = var.nexus_sha256
-  ssh_public_key             = local.ssh_public_key
-  extra_tags                 = local.schedule_tag
-  enable_detailed_monitoring = var.enable_detailed_monitoring
-  ami_id                     = var.ami_id
-
-  depends_on = [
-    module.networking,
-    module.security_groups
-  ]
-}
-
-module "instance_scheduler" {
-  count  = var.enable_instance_scheduler ? 1 : 0
-  source = "./modules/instance-scheduler"
-
-  project_name = var.project_name
-  environment  = var.environment
-  aws_region   = var.aws_region
-  stop_cron    = var.instance_schedule_stop
-  start_cron   = var.instance_schedule_start
+  vpc_id              = module.networking.vpc_id
+  vpc_cidr_block      = module.networking.vpc_cidr
+  allowed_ssh_cidr    = var.allowed_ssh_cidr
+  allowed_web_cidr    = local.web_cidr
+  jenkins_alb_sg_id   = try(aws_security_group.jenkins_alb[0].id, "")
+  environment         = var.environment
+  project_name        = var.project_name
 }
 
 module "ai_cicd_agent" {
@@ -208,4 +116,140 @@ module "ai_cicd_agent" {
   bedrock_model_id        = var.bedrock_model_id
   enable_retrain          = var.enable_ai_retrain
   extra_tags              = local.schedule_tag
+}
+
+module "jenkins_master" {
+  source = "./modules/jenkins-master"
+
+  environment       = var.environment
+  project_name      = var.project_name
+  vpc_id            = module.networking.vpc_id
+  subnet_id         = var.enable_jenkins_alb ? module.networking.private_subnet_ids[0] : module.networking.public_subnet_ids[0]
+  security_group_id = module.security_groups.jenkins_master_sg_id
+  instance_type     = var.jenkins_master_instance_type
+  admin_user        = var.jenkins_admin_user
+  admin_password    = ""
+  admin_secret_arn  = aws_secretsmanager_secret.jenkins_admin.arn
+
+  jenkins_agent_secret_arns = {
+    amd64 = aws_secretsmanager_secret.jenkins_agent_amd64.arn
+    arm64 = aws_secretsmanager_secret.jenkins_agent_arm64.arn
+  }
+
+  ssh_public_key             = local.ssh_public_key
+  jenkins_agent_sg_id        = module.security_groups.jenkins_agent_sg_id
+  sonarqube_url              = module.sonarqube.sonarqube_private_ip != "" ? "http://${module.sonarqube.sonarqube_private_ip}:9000" : ""
+  nexus_url                  = module.nexus.nexus_private_ip != "" ? "http://${module.nexus.nexus_private_ip}:8081" : ""
+  aws_region                 = var.aws_region
+  ai_webhook_url             = module.ai_cicd_agent.webhook_url
+  ai_lambda_function_arn     = module.ai_cicd_agent.lambda_function_arn
+  extra_tags                 = local.schedule_tag
+  enable_detailed_monitoring = var.enable_detailed_monitoring
+  ami_id                     = var.ami_id
+  maven_sha512               = var.maven_sha512
+  gradle_sha256              = var.gradle_sha256
+
+  depends_on = [module.networking, module.security_groups, module.ai_cicd_agent]
+}
+
+module "jenkins_alb" {
+  count  = var.enable_jenkins_alb ? 1 : 0
+  source = "./modules/jenkins-alb"
+
+  project_name              = var.project_name
+  environment               = var.environment
+  vpc_id                    = module.networking.vpc_id
+  public_subnet_ids         = module.networking.public_subnet_ids
+  jenkins_private_ip        = module.jenkins_master.jenkins_master_private_ip
+  alb_security_group_id     = aws_security_group.jenkins_alb[0].id
+  enable_https              = var.jenkins_alb_enable_https
+  enable_dns                = var.jenkins_alb_enable_dns
+  domain_name               = var.jenkins_domain_name
+  route53_zone_id           = var.jenkins_route53_zone_id
+  acm_certificate_arn       = var.jenkins_acm_certificate_arn
+  enable_deletion_protection = var.jenkins_alb_deletion_protection
+  access_logs_bucket        = var.jenkins_alb_access_logs_bucket
+
+  depends_on = [module.jenkins_master]
+}
+
+module "jenkins_agent" {
+  source = "./modules/jenkins-agent"
+
+  environment                = var.environment
+  project_name               = var.project_name
+  vpc_id                     = module.networking.vpc_id
+  subnet_ids                 = var.enable_jenkins_alb ? module.networking.private_subnet_ids : module.networking.public_subnet_ids
+  security_group_id          = module.security_groups.jenkins_agent_sg_id
+  aws_region                 = var.aws_region
+  agent_amd64_instance_types = var.agent_amd64_instance_types
+  agent_arm64_instance_types = var.agent_arm64_instance_types
+  min_target_capacity        = var.agent_min_target_capacity
+  max_target_capacity        = var.agent_max_target_capacity
+  spot_allocation_strategy   = var.agent_spot_allocation_strategy
+  jenkins_master_private_ip  = module.jenkins_master.jenkins_master_private_ip
+
+  jenkins_agent_secret_arns = {
+    amd64 = aws_secretsmanager_secret.jenkins_agent_amd64.arn
+    arm64 = aws_secretsmanager_secret.jenkins_agent_arm64.arn
+  }
+
+  ssh_public_key         = local.ssh_public_key
+  ai_lambda_function_arn = module.ai_cicd_agent.lambda_function_arn
+  extra_tags             = {}
+  amd64_ami_id           = var.agent_amd64_ami_id
+  arm64_ami_id           = var.agent_arm64_ami_id
+  maven_sha512           = var.maven_sha512
+  gradle_sha256          = var.gradle_sha256
+
+  depends_on = [module.jenkins_master, module.networking, module.security_groups, module.ai_cicd_agent]
+}
+
+module "sonarqube" {
+  source = "./modules/sonarqube"
+
+  environment                = var.environment
+  project_name               = var.project_name
+  vpc_id                     = module.networking.vpc_id
+  subnet_id                  = var.enable_jenkins_alb ? module.networking.private_subnet_ids[1] : module.networking.public_subnet_ids[0]
+  security_group_id          = module.security_groups.sonarqube_sg_id
+  instance_type              = var.sonarqube_instance_type
+  sonarqube_version          = var.sonarqube_version
+  sonarqube_sha256           = var.sonarqube_sha256
+  ssh_public_key             = local.ssh_public_key
+  extra_tags                 = local.schedule_tag
+  enable_detailed_monitoring = var.enable_detailed_monitoring
+  ami_id                     = var.ami_id
+
+  depends_on = [module.networking, module.security_groups]
+}
+
+module "nexus" {
+  source = "./modules/nexus"
+
+  environment                = var.environment
+  project_name               = var.project_name
+  vpc_id                     = module.networking.vpc_id
+  subnet_id                  = var.enable_jenkins_alb ? module.networking.private_subnet_ids[0] : module.networking.public_subnet_ids[0]
+  security_group_id          = module.security_groups.nexus_sg_id
+  instance_type              = var.nexus_instance_type
+  nexus_version              = var.nexus_version
+  nexus_sha256               = var.nexus_sha256
+  ssh_public_key             = local.ssh_public_key
+  extra_tags                 = local.schedule_tag
+  enable_detailed_monitoring = var.enable_detailed_monitoring
+  ami_id                     = var.ami_id
+
+  depends_on = [module.networking, module.security_groups]
+}
+
+module "instance_scheduler" {
+  count  = var.enable_instance_scheduler ? 1 : 0
+  source = "./modules/instance-scheduler"
+
+  project_name = var.project_name
+  environment  = var.environment
+  aws_region   = var.aws_region
+  stop_cron    = var.instance_schedule_stop
+  start_cron   = var.instance_schedule_start
 }
