@@ -14,8 +14,6 @@ data "aws_ami" "amazon_linux_2023" {
 }
 
 locals {
-  # A pinned ami_id keeps plans stable across AL2023 releases. Left empty, the
-  # current AMI is resolved, which replaces the instance when a new AMI ships.
   jenkins_master_ami_id = var.ami_id != "" ? var.ami_id : data.aws_ami.amazon_linux_2023.id
 }
 
@@ -23,9 +21,7 @@ resource "aws_key_pair" "this" {
   key_name   = "${var.project_name}-${var.environment}-jenkins-master-key"
   public_key = var.ssh_public_key
 
-  tags = {
-    Name = "${var.project_name}-${var.environment}-jenkins-master-key"
-  }
+  tags = { Name = "${var.project_name}-${var.environment}-jenkins-master-key" }
 }
 
 data "aws_iam_policy_document" "instance_assume" {
@@ -108,18 +104,15 @@ resource "aws_iam_instance_profile" "instance" {
 }
 
 resource "aws_instance" "jenkins_master" {
-  ami                    = local.jenkins_master_ami_id
-  instance_type          = var.instance_type
-  subnet_id              = var.subnet_id
-  vpc_security_group_ids = [var.security_group_id]
-  key_name               = aws_key_pair.this.key_name
-  iam_instance_profile   = aws_iam_instance_profile.instance.name
-  monitoring             = var.enable_detailed_monitoring
-  ebs_optimized          = true
-  # An Elastic IP is attached below. associate_public_ip_address stays enabled so
-  # user_data has outbound access from first boot, before the EIP association
-  # completes; the EIP takes over the public address once attached.
-  associate_public_ip_address = true
+  ami                         = local.jenkins_master_ami_id
+  instance_type               = var.instance_type
+  subnet_id                   = var.subnet_id
+  vpc_security_group_ids      = [var.security_group_id]
+  key_name                    = aws_key_pair.this.key_name
+  iam_instance_profile        = aws_iam_instance_profile.instance.name
+  monitoring                  = var.enable_detailed_monitoring
+  ebs_optimized               = true
+  associate_public_ip_address = var.associate_public_ip_address
   user_data_replace_on_change = true
 
   metadata_options {
@@ -128,9 +121,7 @@ resource "aws_instance" "jenkins_master" {
     http_put_response_hop_limit = 1
   }
 
-  maintenance_options {
-    auto_recovery = "default"
-  }
+  maintenance_options { auto_recovery = "default" }
 
   root_block_device {
     volume_size           = 40
@@ -166,6 +157,7 @@ resource "aws_instance" "jenkins_master" {
 }
 
 resource "aws_eip" "this" {
+  count    = var.create_eip ? 1 : 0
   domain   = "vpc"
   instance = aws_instance.jenkins_master.id
 
