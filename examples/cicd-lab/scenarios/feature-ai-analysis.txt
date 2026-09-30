@@ -1,0 +1,2 @@
+Training scenario: AI analysis branch.
+Expected: build and tests pass, then the AI Diagnostic Payload stage runs so you can inspect advisory analysis even without a failed build.
