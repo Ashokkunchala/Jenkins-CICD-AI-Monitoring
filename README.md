@@ -1,83 +1,86 @@
 # Jenkins CI/CD AI Monitoring Platform
 
-Terraform-based AWS platform for Jenkins CI/CD with architecture-specific Spot agents, SonarQube, Nexus Repository, CloudWatch observability, and an IAM-protected AI analysis workflow.
+Terraform-based AWS platform for Jenkins CI/CD with architecture-specific Spot agents, SonarQube, Nexus Repository, CloudWatch observability, AWS Backup, and an IAM-protected AI analysis workflow.
 
-## What this project provides
+## Production hardening included
 
-- AWS VPC networking with public/private subnet support, optional NAT Gateway, and VPC Flow Logs.
-- Jenkins controller on Amazon Linux 2023 with Secrets Manager-managed administrator credentials.
-- AMD64 and ARM64 Jenkins Spot agent Auto Scaling Groups.
-- SonarQube and Nexus Repository hosts for quality and artifact management.
-- AI workflow using Lambda, Step Functions, DynamoDB, SNS, and Amazon Bedrock.
-- Optional GitHub pull-request based AI auto-fix flow.
-- EC2 and application log collection into CloudWatch.
-- Offline Terraform, shell, TFLint, Checkov, and secret/state validation.
+- Production-mode Terraform guardrails that fail unsafe production plans before infrastructure changes are made.
+- Multi-AZ subnet requirements for production configuration.
+- NAT/private-subnet prerequisite for controlled outbound access.
+- Pinned AMI and artifact checksum requirements for production.
+- Development start/stop scheduling is rejected in production mode.
+- Daily AWS Backup recovery points with configurable retention.
+- CloudWatch alarms for Jenkins controller status failures and sustained high CPU.
+- SNS operations notification topic with optional email subscription.
+- Jenkins Remoting port 50000 restricted to the managed agent security group.
+- Secrets Manager for Jenkins administrator and agent secrets.
+- IAM/SigV4 protection for the AI webhook.
+- AI auto-fix disabled by default and limited to pull-request based changes when enabled.
 
-## Architecture and operating model
+## Important production boundary
 
-See `docs/ARCHITECTURE.md`, `docs/AI_AGENT.md`, and `docs/RUNBOOK.md`.
+The repository now has production operating guardrails, recovery controls, and security hardening, but the Jenkins controller is still a stateful EC2 controller. For a real internet-facing production service, put Jenkins behind an approved TLS reverse proxy/ALB with ACM, use private controller/agent subnets, and test the Jenkins restore procedure before declaring the service production-ready. Jenkins documents that reverse proxies must preserve the correct `Host` and `X-Forwarded-Proto` behavior and support WebSocket/HTTP keepalive where required. urlJenkins reverse-proxy guidancehttps://www.jenkins.io/doc/book/system-administration/reverse-proxy-configuration-troubleshooting/
 
-A reference Jenkins pipeline is included at `Jenkinsfile.example`.
+## Components
 
-## Prerequisites
+- AWS VPC, public/private subnets, NAT, VPC Flow Logs
+- Jenkins controller on Amazon Linux 2023
+- AMD64 and ARM64 Jenkins Spot Auto Scaling Groups
+- SonarQube and Nexus Repository
+- Lambda + Step Functions + DynamoDB + SNS + Amazon Bedrock AI workflow
+- CloudWatch logs, metrics, and alarms
+- AWS Backup
+- GitHub Actions Terraform/Checkov validation
 
-- Terraform >= 1.9.8
-- AWS credentials for the target account
-- Existing S3 state backend and locking configuration
-- SSH public key
-- Appropriate AWS permissions
-- Amazon Bedrock model access when the AI workflow is enabled
+## Production deployment
 
-## Validate locally
+Start from `terraform.tfvars.example` and create a separate production variable file that is never committed.
+
+```hcl
+production_mode             = true
+environment                  = "prod"
+enable_nat_gateway           = true
+enable_instance_scheduler    = false
+enable_detailed_monitoring   = true
+availability_zones           = ["us-east-1a", "us-east-1b"]
+backup_retention_days        = 30
+operations_alert_email      = "ops@example.com"
+```
+
+Pin and review the AMI IDs and publish the verified SonarQube checksum before applying.
+
+Then:
 
 ```bash
 terraform fmt -check -recursive
-terraform init -backend=false -input=false
+terraform init
 terraform validate
-(cd examples/simple && terraform init -backend=false -input=false && terraform validate)
-find modules -name '*.sh' -print0 | xargs -0 -n1 bash -n
-```
-
-## Deploy
-
-```bash
-cp terraform.tfvars.example terraform.tfvars
-# Set region, SSH key path, trusted SSH/web CIDRs, and optional AI settings.
-terraform init \
-  -backend-config="bucket=REPLACE_WITH_STATE_BUCKET" \
-  -backend-config="key=jenkins-cicd-ai/terraform.tfstate" \
-  -backend-config="region=REPLACE_WITH_REGION" \
-  -backend-config="encrypt=true"
 terraform plan -out=deployment.tfplan
+# Review replacements carefully before approval.
 terraform apply deployment.tfplan
 ```
 
-Never commit `terraform.tfvars`, state files, private keys, tokens, or environment files.
+Never commit `terraform.tfvars`, Terraform state, private keys, tokens, or environment files.
 
 ## AI workflow
 
-The Function URL is IAM-protected. Jenkins should use `/usr/local/bin/invoke-ai-agent` on the controller so the request is signed with AWS SigV4 using the controller instance role.
+Jenkins calls `/usr/local/bin/invoke-ai-agent`, which signs the request with AWS SigV4 using the controller instance role. The payload must contain diagnostics only. Never send credentials, access tokens, private keys, or unfiltered environment variables.
 
-The payload should contain diagnostics only. Do not include passwords, tokens, private keys, credentials, or unfiltered environment variables.
+The workflow can analyze build failures, predict recurring issues, classify problems, persist findings, notify operators, and optionally propose fixes through GitHub pull requests.
 
-AI auto-fix is disabled by default. When explicitly enabled, generated fixes should become reviewable GitHub pull requests rather than direct commits to the default branch.
+## Operations
 
-## Cost and scale notes
+See:
 
-- NAT Gateway is optional and disabled by default.
-- Detailed EC2 monitoring is optional.
-- Scheduled AI retraining is optional.
-- Spot agents use zero on-demand base capacity by default.
-- Current Spot agent capacity is capped at one per architecture because the Jenkins nodes use static names. To scale beyond one agent per architecture, introduce dynamic node registration before increasing the ASG ceiling.
+- `docs/ARCHITECTURE.md` — production architecture and trust boundaries
+- `docs/RUNBOOK.md` — deployment, recovery, backup/restore drills, and incident procedures
+- `docs/AI_AGENT.md` — AI workflow and payload contract
+- `Jenkinsfile.example` — reference CI/CD integration
 
-## Security notes
+## Scale boundary
 
-- Restrict SSH and web CIDRs to trusted networks.
-- Keep Jenkins, SonarQube, and Nexus behind TLS and private access for production deployments.
-- Store secrets in Secrets Manager.
-- Treat any previously committed state or credential material as compromised and rotate affected credentials.
-- Review AI-generated pull requests before merge.
+Spot agents are currently capped at one static Jenkins node per architecture. For larger production workloads, replace static node registration with dynamic Jenkins cloud agents before increasing ASG capacity.
 
-## CI
+## CI quality gates
 
-GitHub Actions validates Terraform formatting/validation, example validation, state/secret tracking, shell syntax, and Checkov. The existing `.github/workflows/validate.yml` remains available for the broader project validation suite.
+GitHub Actions validates Terraform formatting/validation, example configuration, shell syntax, tracked secrets/state, and Checkov. Workflow execution should be treated as a required change gate before production deployment.
