@@ -5,6 +5,12 @@ variable "public_subnet_ids" { type = list(string) }
 variable "jenkins_private_ip" { type = string }
 variable "alb_security_group_id" { type = string }
 
+variable "access_logs_bucket" {
+  description = "Optional S3 bucket for ALB access logs; the bucket must grant the ALB service permission to write logs"
+  type        = string
+  default     = ""
+}
+
 variable "enable_https" {
   description = "Create HTTPS listener and redirect HTTP to HTTPS"
   type        = bool
