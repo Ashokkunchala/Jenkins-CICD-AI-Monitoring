@@ -30,7 +30,7 @@ variable "domain_name" {
 }
 
 variable "route53_zone_id" {
-  description = "Existing public Route53 hosted zone ID; optional when domain lookup can resolve it"
+  description = "Existing public Route53 hosted zone ID required when DNS automation is enabled"
   type        = string
   default     = ""
 }
@@ -49,7 +49,14 @@ variable "enable_deletion_protection" {
 
 check "https_configuration" {
   assert {
-    condition     = !var.enable_https || var.acm_certificate_arn != "" || (var.enable_dns && var.domain_name != "")
-    error_message = "HTTPS requires an existing ACM certificate ARN or DNS-enabled certificate issuance with a domain name."
+    condition     = !var.enable_https || (var.domain_name != "" && (var.acm_certificate_arn != "" || (var.enable_dns && var.route53_zone_id != "")))
+    error_message = "HTTPS requires a domain name and either an existing ACM certificate ARN or DNS certificate issuance with an explicit Route53 hosted zone ID."
+  }
+}
+
+check "dns_configuration" {
+  assert {
+    condition     = !var.enable_dns || (var.domain_name != "" && var.route53_zone_id != "")
+    error_message = "DNS automation requires both domain_name and route53_zone_id."
   }
 }
