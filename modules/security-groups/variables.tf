@@ -14,13 +14,19 @@ variable "allowed_ssh_cidr" {
 }
 
 variable "allowed_web_cidr" {
-  description = "CIDR block allowed to access web interfaces"
+  description = "CIDR block allowed to access web interfaces in non-ALB mode"
   type        = string
 
   validation {
     condition     = can(cidrhost(var.allowed_web_cidr, 0)) && var.allowed_web_cidr != "0.0.0.0/0"
     error_message = "allowed_web_cidr must be a valid restricted IPv4 CIDR block."
   }
+}
+
+variable "jenkins_alb_sg_id" {
+  description = "Production Jenkins ALB security group ID; when set, controller port 8080 is reachable only from this group"
+  type        = string
+  default     = ""
 }
 
 variable "environment" {
