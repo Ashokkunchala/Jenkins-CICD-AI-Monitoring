@@ -147,6 +147,7 @@ resource "aws_instance" "jenkins_master" {
     nexus_url                      = var.nexus_url
     aws_region                     = var.aws_region
     ai_webhook_url                 = var.ai_webhook_url
+    jenkins_public_url             = var.jenkins_public_url
     maven_sha512                   = var.maven_sha512
     gradle_sha256                  = var.gradle_sha256
   }))
