@@ -3,17 +3,7 @@ variable "environment" { type = string }
 variable "vpc_id" { type = string }
 variable "public_subnet_ids" { type = list(string) }
 variable "jenkins_private_ip" { type = string }
-
-variable "allowed_client_cidrs" {
-  description = "CIDRs allowed to reach the public Jenkins ALB"
-  type        = list(string)
-  default     = []
-
-  validation {
-    condition     = length(var.allowed_client_cidrs) > 0 && alltrue([for c in var.allowed_client_cidrs : can(cidrhost(c, 0))])
-    error_message = "At least one valid client CIDR is required."
-  }
-}
+variable "alb_security_group_id" { type = string }
 
 variable "enable_https" {
   description = "Create HTTPS listener and redirect HTTP to HTTPS"
@@ -53,7 +43,7 @@ variable "enable_deletion_protection" {
 
 check "https_configuration" {
   assert {
-    condition     = !var.enable_https || var.acm_certificate_arn != "" || (var.enable_dns && var.domain_name != "" && (var.route53_zone_id != "" || var.domain_name != ""))
+    condition     = !var.enable_https || var.acm_certificate_arn != "" || (var.enable_dns && var.domain_name != "")
     error_message = "HTTPS requires an existing ACM certificate ARN or DNS-enabled certificate issuance with a domain name."
   }
 }
