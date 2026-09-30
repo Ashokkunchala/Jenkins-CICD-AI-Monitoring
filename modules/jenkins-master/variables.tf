@@ -139,6 +139,12 @@ variable "create_eip" {
   default     = true
 }
 
+variable "jenkins_public_url" {
+  description = "Canonical Jenkins URL used for reverse-proxy and webhook configuration"
+  type        = string
+  default     = ""
+}
+
 variable "extra_tags" {
   description = "Additional tags to apply to resources"
   type        = map(string)
