@@ -1,0 +1,2 @@
+TRAINING_SECURITY_FINDING
+This marker is intentionally non-production test data. The security/sast-demo branch should fail its security gate.
