@@ -4,8 +4,8 @@ output "nexus_id" {
 }
 
 output "nexus_public_ip" {
-  description = "Nexus public IP"
-  value       = aws_eip.this.public_ip
+  description = "Nexus public IP when EIP mode is enabled"
+  value       = try(aws_eip.this[0].public_ip, null)
 }
 
 output "nexus_private_ip" {
