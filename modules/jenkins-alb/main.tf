@@ -19,6 +19,15 @@ resource "aws_lb" "jenkins" {
   drop_invalid_header_fields = true
   idle_timeout               = 120
 
+  dynamic "access_logs" {
+    for_each = var.access_logs_bucket != "" ? [1] : []
+    content {
+      bucket  = var.access_logs_bucket
+      enabled = true
+      prefix  = "jenkins-alb"
+    }
+  }
+
   tags = { Name = "${var.project_name}-${var.environment}-jenkins-alb" }
 }
 
