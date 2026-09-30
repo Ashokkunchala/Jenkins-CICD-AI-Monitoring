@@ -74,19 +74,38 @@ resource "aws_security_group" "sonarqube" {
   vpc_id      = var.vpc_id
 
   ingress {
-    description = "SSH"
+    description = "SSH from trusted administration network"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
     cidr_blocks = [var.allowed_ssh_cidr]
   }
 
+  dynamic "ingress" {
+    for_each = var.jenkins_alb_sg_id == "" ? [1] : []
+    content {
+      description = "SonarQube UI from trusted clients in non-production mode"
+      from_port   = 9000
+      to_port     = 9000
+      protocol    = "tcp"
+      cidr_blocks = [var.allowed_web_cidr]
+    }
+  }
+
   ingress {
-    description = "SonarQube UI and API"
-    from_port   = 9000
-    to_port     = 9000
-    protocol    = "tcp"
-    cidr_blocks = [var.allowed_web_cidr]
+    description     = "SonarQube API from Jenkins controller"
+    from_port       = 9000
+    to_port         = 9000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.jenkins_master.id]
+  }
+
+  ingress {
+    description     = "SonarQube API from Jenkins agents"
+    from_port       = 9000
+    to_port         = 9000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.jenkins_agent.id]
   }
 
   egress {
@@ -106,27 +125,49 @@ resource "aws_security_group" "nexus" {
   vpc_id      = var.vpc_id
 
   ingress {
-    description = "SSH"
+    description = "SSH from trusted administration network"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
     cidr_blocks = [var.allowed_ssh_cidr]
   }
 
-  ingress {
-    description = "Nexus UI"
-    from_port   = 8081
-    to_port     = 8081
-    protocol    = "tcp"
-    cidr_blocks = [var.allowed_web_cidr]
+  dynamic "ingress" {
+    for_each = var.jenkins_alb_sg_id == "" ? [1] : []
+    content {
+      description = "Nexus UI from trusted clients in non-production mode"
+      from_port   = 8081
+      to_port     = 8081
+      protocol    = "tcp"
+      cidr_blocks = [var.allowed_web_cidr]
+    }
   }
 
   ingress {
-    description = "Nexus Docker registry"
-    from_port   = 8082
-    to_port     = 8083
-    protocol    = "tcp"
-    cidr_blocks = [var.allowed_web_cidr]
+    description     = "Nexus repository from Jenkins controller"
+    from_port       = 8081
+    to_port         = 8081
+    protocol        = "tcp"
+    security_groups = [aws_security_group.jenkins_master.id]
+  }
+
+  ingress {
+    description     = "Nexus repository from Jenkins agents"
+    from_port       = 8081
+    to_port         = 8083
+    protocol        = "tcp"
+    security_groups = [aws_security_group.jenkins_agent.id]
+  }
+
+  dynamic "ingress" {
+    for_each = var.jenkins_alb_sg_id == "" ? [1] : []
+    content {
+      description = "Nexus Docker registry from trusted clients in non-production mode"
+      from_port   = 8082
+      to_port     = 8083
+      protocol    = "tcp"
+      cidr_blocks = [var.allowed_web_cidr]
+    }
   }
 
   egress {
