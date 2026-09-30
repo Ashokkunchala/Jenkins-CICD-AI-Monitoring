@@ -4,8 +4,8 @@ output "sonarqube_id" {
 }
 
 output "sonarqube_public_ip" {
-  description = "SonarQube public IP"
-  value       = aws_eip.this.public_ip
+  description = "SonarQube public IP when EIP mode is enabled"
+  value       = try(aws_eip.this[0].public_ip, null)
 }
 
 output "sonarqube_private_ip" {
