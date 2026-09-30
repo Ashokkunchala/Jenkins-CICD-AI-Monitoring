@@ -136,20 +136,21 @@ module "jenkins_master" {
     arm64 = aws_secretsmanager_secret.jenkins_agent_arm64.arn
   }
 
-  ssh_public_key             = local.ssh_public_key
-  jenkins_agent_sg_id        = module.security_groups.jenkins_agent_sg_id
-  sonarqube_url              = module.sonarqube.sonarqube_private_ip != "" ? "http://${module.sonarqube.sonarqube_private_ip}:9000" : ""
-  nexus_url                  = module.nexus.nexus_private_ip != "" ? "http://${module.nexus.nexus_private_ip}:8081" : ""
-  aws_region                 = var.aws_region
-  ai_webhook_url             = module.ai_cicd_agent.webhook_url
-  ai_lambda_function_arn     = module.ai_cicd_agent.lambda_function_arn
-  extra_tags                 = local.schedule_tag
-  enable_detailed_monitoring = var.enable_detailed_monitoring
+  ssh_public_key              = local.ssh_public_key
+  jenkins_agent_sg_id         = module.security_groups.jenkins_agent_sg_id
+  sonarqube_url               = module.sonarqube.sonarqube_private_ip != "" ? "http://${module.sonarqube.sonarqube_private_ip}:9000" : ""
+  nexus_url                   = module.nexus.nexus_private_ip != "" ? "http://${module.nexus.nexus_private_ip}:8081" : ""
+  aws_region                  = var.aws_region
+  ai_webhook_url              = module.ai_cicd_agent.webhook_url
+  jenkins_public_url          = var.enable_jenkins_alb ? (var.jenkins_alb_enable_https ? "https://${var.jenkins_domain_name}" : "http://${var.jenkins_domain_name}") : ""
+  ai_lambda_function_arn      = module.ai_cicd_agent.lambda_function_arn
+  extra_tags                  = local.schedule_tag
+  enable_detailed_monitoring  = var.enable_detailed_monitoring
   associate_public_ip_address = !var.enable_jenkins_alb
-  create_eip                   = !var.enable_jenkins_alb
-  ami_id                     = var.ami_id
-  maven_sha512               = var.maven_sha512
-  gradle_sha256              = var.gradle_sha256
+  create_eip                  = !var.enable_jenkins_alb
+  ami_id                      = var.ami_id
+  maven_sha512                = var.maven_sha512
+  gradle_sha256               = var.gradle_sha256
 
   depends_on = [module.networking, module.security_groups, module.ai_cicd_agent]
 }
