@@ -6,7 +6,7 @@ Terraform-based AWS platform for Jenkins CI/CD with architecture-specific Spot a
 
 Production mode can place the Jenkins controller and agents in private subnets behind a public Application Load Balancer with HTTPS/ACM and optional Route53 DNS automation. SonarQube and Nexus are also placed in private subnets and are reachable from Jenkins security groups rather than directly from the Internet.
 
-AWS Application Load Balancers support HTTPS listeners and WebSockets; Jenkins requires a correctly configured reverse proxy and canonical Jenkins URL. urlAWS ALB HTTPS documentationhttps://docs.aws.amazon.com/elasticloadbalancing/latest/application/create-https-listener.html urlJenkins reverse-proxy guidancehttps://www.jenkins.io/doc/book/system-administration/reverse-proxy-configuration-troubleshooting/
+AWS Application Load Balancers support HTTPS listeners and WebSockets; Jenkins requires a correctly configured reverse proxy and canonical Jenkins URL. See the existing architecture documentation for the deployment details.
 
 ## Production hardening included
 
@@ -23,9 +23,33 @@ AWS Application Load Balancers support HTTPS listeners and WebSockets; Jenkins r
 - Pinned AMI/checksum guardrails for production.
 - Production scheduler disabled by guardrail.
 - Detailed EC2 monitoring required in production.
-- AWS Backup and CloudWatch operational controls already present in the platform.
+- AWS Backup and CloudWatch operational controls.
 - IAM/SigV4 protection for the AI webhook.
 - AI auto-fix disabled by default and limited to pull-request based changes when enabled.
+
+## CI/CD training lab
+
+A complete multi-branch application is included under `examples/cicd-lab/` so you can learn and test the entire Jenkins + AI Monitoring workflow without inventing a project yourself.
+
+### Branches
+
+- `main` — normal green pipeline
+- `feature/green` — healthy feature branch
+- `feature/ai-analysis` — healthy build with explicit AI analysis
+- `bugfix/test-failure` — controlled pipeline failure
+- `security/sast-demo` — controlled security-gate failure
+- `release/staging` — release/package/deployment simulation
+- `hotfix/rollback-demo` — hotfix and rollback simulation
+
+The training branches are intentionally designed to produce different pipeline behavior. Do not merge the deliberately failing training branches into production.
+
+Start here:
+
+- `examples/cicd-lab/README.md` — lab project
+- `docs/JENKINS_MULTIBRANCH_SETUP.md` — Jenkins Multibranch configuration
+- `docs/CI_CD_LAB_CASES.md` — 12 hands-on test cases and expected results
+
+The lab exercises build, test, security gates, artifacts, AI diagnostics, Spot-agent recovery concepts, graceful AI degradation, pull requests, and rollback thinking.
 
 ## Production deployment
 
@@ -45,22 +69,6 @@ terraform apply prod.tfplan
 ```
 
 The production guardrails intentionally stop unsafe configurations before deployment.
-
-## TLS and DNS
-
-You can either provide an existing ACM certificate ARN or enable Terraform-managed DNS validation using a public Route53 hosted zone. The Jenkins hostname on the certificate must match the hostname clients use.
-
-For production, restrict the ALB client CIDRs to the corporate network/VPN rather than using `0.0.0.0/0`.
-
-## Private administration
-
-The production controller is intended to be administered through AWS Systems Manager Session Manager rather than exposing Jenkins port 8080 publicly.
-
-```bash
-aws ssm start-session --target <jenkins-instance-id>
-```
-
-Port forwarding can be used for temporary administrative access without opening Jenkins to the Internet.
 
 ## Components
 
@@ -87,6 +95,8 @@ See:
 - `docs/PRODUCTION.md` — production deployment and administration
 - `docs/RUNBOOK.md` — recovery, backup/restore, and incident procedures
 - `docs/AI_AGENT.md` — AI workflow and payload contract
+- `docs/JENKINS_MULTIBRANCH_SETUP.md` — Multibranch Pipeline setup
+- `docs/CI_CD_LAB_CASES.md` — practical training exercises
 - `Jenkinsfile.example` — reference CI/CD integration
 
 ## Scale boundary
