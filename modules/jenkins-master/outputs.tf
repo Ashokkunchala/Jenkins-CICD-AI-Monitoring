@@ -4,8 +4,8 @@ output "jenkins_master_id" {
 }
 
 output "jenkins_master_public_ip" {
-  description = "Jenkins controller public IP"
-  value       = aws_eip.this.public_ip
+  description = "Jenkins controller public IP when EIP mode is enabled"
+  value       = try(aws_eip.this[0].public_ip, null)
 }
 
 output "jenkins_master_private_ip" {
@@ -14,7 +14,7 @@ output "jenkins_master_private_ip" {
 }
 
 output "jenkins_master_public_dns" {
-  description = "Jenkins controller public DNS"
+  description = "Jenkins controller public DNS when public addressing is enabled"
   value       = aws_instance.jenkins_master.public_dns
 }
 
