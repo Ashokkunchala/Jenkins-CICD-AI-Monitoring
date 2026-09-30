@@ -2,24 +2,65 @@
 
 Terraform-based AWS platform for Jenkins CI/CD with architecture-specific Spot agents, SonarQube, Nexus Repository, CloudWatch observability, AWS Backup, and an IAM-protected AI analysis workflow.
 
+## Production architecture
+
+Production mode can place the Jenkins controller and agents in private subnets behind a public Application Load Balancer with HTTPS/ACM and optional Route53 DNS automation. SonarQube and Nexus are also placed in private subnets and are reachable from Jenkins security groups rather than directly from the Internet.
+
+AWS Application Load Balancers support HTTPS listeners and WebSockets; Jenkins requires a correctly configured reverse proxy and canonical Jenkins URL. urlAWS ALB HTTPS documentationhttps://docs.aws.amazon.com/elasticloadbalancing/latest/application/create-https-listener.html urlJenkins reverse-proxy guidancehttps://www.jenkins.io/doc/book/system-administration/reverse-proxy-configuration-troubleshooting/
+
 ## Production hardening included
 
-- Production-mode Terraform guardrails that fail unsafe production plans before infrastructure changes are made.
-- Multi-AZ subnet requirements for production configuration.
-- NAT/private-subnet prerequisite for controlled outbound access.
-- Pinned AMI and artifact checksum requirements for production.
-- Development start/stop scheduling is rejected in production mode.
-- Daily AWS Backup recovery points with configurable retention.
-- CloudWatch alarms for Jenkins controller status failures and sustained high CPU.
-- SNS operations notification topic with optional email subscription.
-- Jenkins Remoting port 50000 restricted to the managed agent security group.
+- Multi-AZ public/private subnet requirements for `prod`.
+- NAT Gateway requirement for private production workloads.
+- Jenkins controller private-subnet mode.
+- Public ALB with restricted client CIDRs.
+- HTTPS-only production Jenkins endpoint with HTTP→HTTPS redirect.
+- ACM certificate support and optional Route53 DNS validation/alias creation.
+- Jenkins controller port 8080 restricted to the ALB security group in production mode.
+- Jenkins Remoting port 50000 restricted to the Jenkins agent security group.
+- SSM support for private controller administration.
 - Secrets Manager for Jenkins administrator and agent secrets.
+- Pinned AMI/checksum guardrails for production.
+- Production scheduler disabled by guardrail.
+- Detailed EC2 monitoring required in production.
+- AWS Backup and CloudWatch operational controls already present in the platform.
 - IAM/SigV4 protection for the AI webhook.
 - AI auto-fix disabled by default and limited to pull-request based changes when enabled.
 
-## Important production boundary
+## Production deployment
 
-The repository now has production operating guardrails, recovery controls, and security hardening, but the Jenkins controller is still a stateful EC2 controller. For a real internet-facing production service, put Jenkins behind an approved TLS reverse proxy/ALB with ACM, use private controller/agent subnets, and test the Jenkins restore procedure before declaring the service production-ready. Jenkins documents that reverse proxies must preserve the correct `Host` and `X-Forwarded-Proto` behavior and support WebSocket/HTTP keepalive where required. urlJenkins reverse-proxy guidancehttps://www.jenkins.io/doc/book/system-administration/reverse-proxy-configuration-troubleshooting/
+Start from:
+
+`environments/prod.tfvars.example`
+
+Create your private production variable file and replace every `REPLACE_ME` value. Do not commit it.
+
+```bash
+cp environments/prod.tfvars.example environments/prod.tfvars
+terraform fmt -check -recursive
+terraform init
+terraform validate
+terraform plan -var-file=environments/prod.tfvars -out=prod.tfplan
+terraform apply prod.tfplan
+```
+
+The production guardrails intentionally stop unsafe configurations before deployment.
+
+## TLS and DNS
+
+You can either provide an existing ACM certificate ARN or enable Terraform-managed DNS validation using a public Route53 hosted zone. The Jenkins hostname on the certificate must match the hostname clients use.
+
+For production, restrict the ALB client CIDRs to the corporate network/VPN rather than using `0.0.0.0/0`.
+
+## Private administration
+
+The production controller is intended to be administered through AWS Systems Manager Session Manager rather than exposing Jenkins port 8080 publicly.
+
+```bash
+aws ssm start-session --target <jenkins-instance-id>
+```
+
+Port forwarding can be used for temporary administrative access without opening Jenkins to the Internet.
 
 ## Components
 
@@ -32,36 +73,6 @@ The repository now has production operating guardrails, recovery controls, and s
 - AWS Backup
 - GitHub Actions Terraform/Checkov validation
 
-## Production deployment
-
-Start from `terraform.tfvars.example` and create a separate production variable file that is never committed.
-
-```hcl
-production_mode             = true
-environment                  = "prod"
-enable_nat_gateway           = true
-enable_instance_scheduler    = false
-enable_detailed_monitoring   = true
-availability_zones           = ["us-east-1a", "us-east-1b"]
-backup_retention_days        = 30
-operations_alert_email      = "ops@example.com"
-```
-
-Pin and review the AMI IDs and publish the verified SonarQube checksum before applying.
-
-Then:
-
-```bash
-terraform fmt -check -recursive
-terraform init
-terraform validate
-terraform plan -out=deployment.tfplan
-# Review replacements carefully before approval.
-terraform apply deployment.tfplan
-```
-
-Never commit `terraform.tfvars`, Terraform state, private keys, tokens, or environment files.
-
 ## AI workflow
 
 Jenkins calls `/usr/local/bin/invoke-ai-agent`, which signs the request with AWS SigV4 using the controller instance role. The payload must contain diagnostics only. Never send credentials, access tokens, private keys, or unfiltered environment variables.
@@ -72,8 +83,9 @@ The workflow can analyze build failures, predict recurring issues, classify prob
 
 See:
 
-- `docs/ARCHITECTURE.md` — production architecture and trust boundaries
-- `docs/RUNBOOK.md` — deployment, recovery, backup/restore drills, and incident procedures
+- `docs/ARCHITECTURE.md` — architecture and trust boundaries
+- `docs/PRODUCTION.md` — production deployment and administration
+- `docs/RUNBOOK.md` — recovery, backup/restore, and incident procedures
 - `docs/AI_AGENT.md` — AI workflow and payload contract
 - `Jenkinsfile.example` — reference CI/CD integration
 
@@ -83,4 +95,6 @@ Spot agents are currently capped at one static Jenkins node per architecture. Fo
 
 ## CI quality gates
 
-GitHub Actions validates Terraform formatting/validation, example configuration, shell syntax, tracked secrets/state, and Checkov. Workflow execution should be treated as a required change gate before production deployment.
+GitHub Actions validates Terraform formatting/validation, example configuration, shell syntax, tracked secrets/state, and Checkov. Treat the CI result as a required change gate before production deployment.
+
+Never commit Terraform state, private keys, tokens, production `.tfvars`, or environment files.
