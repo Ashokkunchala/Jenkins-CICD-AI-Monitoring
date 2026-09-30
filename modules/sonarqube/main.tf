@@ -2,11 +2,7 @@ data "aws_iam_policy_document" "instance_assume" {
   statement {
     actions = ["sts:AssumeRole"]
     effect  = "Allow"
-
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
+    principals { type = "Service", identifiers = ["ec2.amazonaws.com"] }
   }
 }
 
@@ -43,34 +39,25 @@ data "aws_ami" "amazon_linux_2023" {
 }
 
 locals {
-  # A pinned ami_id keeps plans stable across AL2023 releases. Left empty, the
-  # current AMI is resolved, which replaces the instance when a new AMI ships.
   sonarqube_ami_id = var.ami_id != "" ? var.ami_id : data.aws_ami.amazon_linux_2023.id
 }
 
 resource "aws_key_pair" "this" {
   key_name   = "${var.project_name}-${var.environment}-sonar"
   public_key = var.ssh_public_key
-
-  tags = {
-    Name = "${var.project_name}-${var.environment}-sonar-key"
-  }
+  tags       = { Name = "${var.project_name}-${var.environment}-sonar-key" }
 }
 
 resource "aws_instance" "sonarqube" {
-  ami                    = local.sonarqube_ami_id
-  instance_type          = var.instance_type
-  subnet_id              = var.subnet_id
-  vpc_security_group_ids = [var.security_group_id]
-  key_name               = aws_key_pair.this.key_name
-  iam_instance_profile   = aws_iam_instance_profile.instance.name
-  monitoring             = var.enable_detailed_monitoring
-  ebs_optimized          = true
-
-  # An Elastic IP is attached below. associate_public_ip_address stays enabled so
-  # user_data has outbound access from first boot, before the EIP association
-  # completes; the EIP takes over the public address once attached.
-  associate_public_ip_address = true
+  ami                         = local.sonarqube_ami_id
+  instance_type               = var.instance_type
+  subnet_id                   = var.subnet_id
+  vpc_security_group_ids      = [var.security_group_id]
+  key_name                    = aws_key_pair.this.key_name
+  iam_instance_profile        = aws_iam_instance_profile.instance.name
+  monitoring                  = var.enable_detailed_monitoring
+  ebs_optimized               = true
+  associate_public_ip_address = var.associate_public_ip_address
 
   metadata_options {
     http_endpoint               = "enabled"
@@ -78,9 +65,7 @@ resource "aws_instance" "sonarqube" {
     http_put_response_hop_limit = 1
   }
 
-  maintenance_options {
-    auto_recovery = "default"
-  }
+  maintenance_options { auto_recovery = "default" }
 
   root_block_device {
     volume_size           = 30
@@ -88,10 +73,7 @@ resource "aws_instance" "sonarqube" {
     encrypted             = true
     iops                  = 3000
     delete_on_termination = true
-
-    tags = merge(var.extra_tags, {
-      Name = "${var.project_name}-${var.environment}-sonarqube-root"
-    })
+    tags = merge(var.extra_tags, { Name = "${var.project_name}-${var.environment}-sonarqube-root" })
   }
 
   user_data_base64 = base64encode(templatefile("${path.module}/scripts/setup.sh", {
@@ -99,16 +81,12 @@ resource "aws_instance" "sonarqube" {
     sonarqube_sha256  = var.sonarqube_sha256
   }))
 
-  tags = merge(var.extra_tags, {
-    Name = "${var.project_name}-${var.environment}-sonarqube"
-  })
+  tags = merge(var.extra_tags, { Name = "${var.project_name}-${var.environment}-sonarqube" })
 }
 
 resource "aws_eip" "this" {
+  count    = var.create_eip ? 1 : 0
   domain   = "vpc"
   instance = aws_instance.sonarqube.id
-
-  tags = merge(var.extra_tags, {
-    Name = "${var.project_name}-${var.environment}-sonarqube-eip"
-  })
+  tags     = merge(var.extra_tags, { Name = "${var.project_name}-${var.environment}-sonarqube-eip" })
 }
