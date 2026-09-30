@@ -10,8 +10,8 @@ variable "jenkins_alb_allowed_client_cidrs" {
   default     = []
 
   validation {
-    condition     = length(var.jenkins_alb_allowed_client_cidrs) > 0 && alltrue([for c in var.jenkins_alb_allowed_client_cidrs : can(cidrhost(c, 0)) && c != "0.0.0.0/0"])
-    error_message = "Jenkins ALB client CIDRs must contain at least one restricted IPv4 CIDR; 0.0.0.0/0 is intentionally rejected."
+    condition     = !var.enable_jenkins_alb || (length(var.jenkins_alb_allowed_client_cidrs) > 0 && alltrue([for c in var.jenkins_alb_allowed_client_cidrs : can(cidrhost(c, 0)) && c != "0.0.0.0/0"]))
+    error_message = "When Jenkins ALB mode is enabled, client CIDRs must contain at least one restricted IPv4 CIDR; 0.0.0.0/0 is rejected."
   }
 }
 
@@ -69,8 +69,8 @@ check "production_networking" {
   }
 
   assert {
-    condition     = !var.enable_jenkins_alb || (var.jenkins_alb_enable_https && (var.jenkins_acm_certificate_arn != "" || (var.jenkins_alb_enable_dns && var.jenkins_domain_name != "")))
-    error_message = "Production ALB mode requires HTTPS and either an existing ACM certificate ARN or DNS certificate issuance."
+    condition     = !var.enable_jenkins_alb || (var.jenkins_alb_enable_https && var.jenkins_domain_name != "" && (var.jenkins_acm_certificate_arn != "" || var.jenkins_alb_enable_dns))
+    error_message = "Jenkins ALB mode requires HTTPS, a Jenkins domain name, and either an existing ACM certificate ARN or DNS certificate issuance."
   }
 }
 
