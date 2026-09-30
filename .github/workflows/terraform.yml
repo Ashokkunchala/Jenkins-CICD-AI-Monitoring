@@ -1,0 +1,76 @@
+name: Terraform
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terraform:
+    name: Terraform validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Format
+        run: terraform fmt -check -recursive
+
+      - name: Init root
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: Validate root
+        run: terraform validate
+
+      - name: Init example
+        working-directory: examples/simple
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: Validate example
+        working-directory: examples/simple
+        run: terraform validate
+
+      - name: State and secret guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden_regex='(^|/)(terraform\.tfstate|terraform\.tfstate\.backup|.*\.pem|.*\.key|.*\.p12|.*\.pfx|.*\.env|.*\.auto\.tfvars)$'
+          if git ls-files | grep -E "$forbidden_regex"; then
+            echo "Forbidden state or secret file is tracked."
+            exit 1
+          fi
+
+      - name: Shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            bash -n "$file"
+          done < <(find modules -type f -name '*.sh' -print0)
+
+  checkov:
+    name: Checkov
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Checkov scan
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform,secrets
+          soft_fail: false
