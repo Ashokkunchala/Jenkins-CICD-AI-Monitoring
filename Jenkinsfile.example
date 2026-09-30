@@ -1,0 +1,62 @@
+pipeline {
+  agent none
+
+  stages {
+    stage('Checkout') {
+      agent { label 'amd64' }
+      steps { checkout scm }
+    }
+
+    stage('Build') {
+      agent { label 'amd64' }
+      steps { sh 'mvn -B -DskipTests package' }
+    }
+
+    stage('Test') {
+      agent { label 'amd64' }
+      steps { sh 'mvn -B test' }
+    }
+
+    stage('AI Analysis') {
+      agent { label 'amd64' }
+      steps {
+        sh '''
+          set -euo pipefail
+          mkdir -p build
+          python3 - <<'PY'
+import json
+import os
+import subprocess
+from pathlib import Path
+
+def run(command):
+    result = subprocess.run(command, text=True, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, check=False)
+    return result.stdout[-20000:]
+
+payload = {
+    "build_id": os.environ.get("BUILD_TAG", "unknown"),
+    "pipeline": os.environ.get("JOB_NAME", "unknown"),
+    "status": "UNKNOWN",
+    "stage": "AI Analysis",
+    "branch": os.environ.get("BRANCH_NAME", "unknown"),
+    "commit": os.environ.get("GIT_COMMIT", ""),
+    "code_diff": run(["git", "diff", "HEAD^", "HEAD"]) if os.path.isdir(".git") else "",
+    "build_log": run(["bash", "-lc", "mvn -B -q test 2>&1 || true"]),
+    "history": [],
+    "remaining_issues": []
+}
+Path("build/ai-payload.json").write_text(json.dumps(payload), encoding="utf-8")
+PY
+          /usr/local/bin/invoke-ai-agent < build/ai-payload.json
+        '''
+      }
+    }
+  }
+
+  post {
+    always {
+      archiveArtifacts artifacts: 'build/ai-payload.json', allowEmptyArchive: true
+    }
+  }
+}
