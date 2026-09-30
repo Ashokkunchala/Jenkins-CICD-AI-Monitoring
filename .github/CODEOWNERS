@@ -1,0 +1,8 @@
+# Require the repository owner to review infrastructure and security changes.
+* @Ashokkunchala
+
+# Security-sensitive paths
+/.github/ @Ashokkunchala
+/modules/ @Ashokkunchala
+/production.tf @Ashokkunchala
+/environments/ @Ashokkunchala
