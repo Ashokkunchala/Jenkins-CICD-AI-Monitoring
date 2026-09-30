@@ -1,0 +1,146 @@
+pipeline {
+  agent { label 'amd64' }
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+    buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
+  }
+
+  environment {
+    LAB_NAME = 'jenkins-cicd-ai-lab'
+    AI_PAYLOAD = 'build/ai-payload.json'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
+    }
+
+    stage('Branch Policy') {
+      steps {
+        sh '''
+          set -eu
+          echo "Branch: ${BRANCH_NAME:-unknown}"
+          case "${BRANCH_NAME:-unknown}" in
+            main|release/*|hotfix/*|feature/*|bugfix/*|security/*) ;;
+            *) echo "Unsupported training branch pattern"; exit 1 ;;
+          esac
+        '''
+      }
+    }
+
+    stage('Build') {
+      steps { sh 'make build' }
+    }
+
+    stage('Unit Test') {
+      steps {
+        sh 'make test'
+      }
+    }
+
+    stage('Controlled Failure') {
+      when { branch 'bugfix/test-failure' }
+      steps {
+        sh 'echo "Intentional training failure: simulated regression"; exit 1'
+      }
+    }
+
+    stage('Security Gate') {
+      when { branch 'security/sast-demo' }
+      steps {
+        sh '''
+          set -eu
+          echo "Training security gate: searching for a controlled insecure marker"
+          if grep -R --exclude=Jenkinsfile --exclude-dir=.git "TRAINING_SECURITY_FINDING" .; then
+            echo "Security gate failed as expected."
+            exit 1
+          fi
+        '''
+      }
+    }
+
+    stage('AI Diagnostic Payload') {
+      when {
+        anyOf {
+          branch 'bugfix/test-failure'
+          branch 'security/sast-demo'
+          branch 'feature/ai-analysis'
+          branch 'hotfix/rollback-demo'
+          expression { currentBuild.currentResult != 'SUCCESS' }
+        }
+      }
+      steps {
+        sh '''
+          set +e
+          mkdir -p build
+          python3 - <<'PY'
+import json, os, subprocess
+from pathlib import Path
+
+def run(cmd):
+    p = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return p.stdout[-20000:]
+
+payload = {
+  "build_id": os.getenv("BUILD_TAG", "unknown"),
+  "pipeline": os.getenv("JOB_NAME", "unknown"),
+  "status": os.getenv("BUILD_STATUS", "UNKNOWN"),
+  "stage": "AI Diagnostic Payload",
+  "branch": os.getenv("BRANCH_NAME", "unknown"),
+  "commit": os.getenv("GIT_COMMIT", ""),
+  "code_diff": run(["git", "diff", "HEAD~1", "HEAD"]) if os.path.isdir(".git") else "",
+  "build_log": "Training lab payload generated from Jenkins.",
+  "history": [],
+  "remaining_issues": []
+}
+Path("build/ai-payload.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+PY
+          if command -v /usr/local/bin/invoke-ai-agent >/dev/null 2>&1; then
+            /usr/local/bin/invoke-ai-agent < build/ai-payload.json || true
+          else
+            echo "AI invocation helper not installed; payload retained for offline exercise."
+          fi
+        '''
+        archiveArtifacts artifacts: 'build/ai-payload.json', allowEmptyArchive: true
+      }
+    }
+
+    stage('Package') {
+      when {
+        not { anyOf { branch 'bugfix/test-failure'; branch 'security/sast-demo' } }
+      }
+      steps { sh 'make package' }
+    }
+
+    stage('Deploy Simulation') {
+      when { anyOf { branch 'main'; branch 'release/staging'; branch 'hotfix/rollback-demo' } }
+      steps {
+        sh '''
+          set -eu
+          mkdir -p build/deploy
+          echo "branch=${BRANCH_NAME}" > build/deploy/release.txt
+          echo "version=${BUILD_NUMBER}" >> build/deploy/release.txt
+          if [ "${BRANCH_NAME}" = "hotfix/rollback-demo" ]; then
+            echo "ROLLBACK_SIMULATION=prepared" >> build/deploy/release.txt
+            echo "Hotfix rollback simulation prepared."
+          else
+            echo "DEPLOYMENT_SIMULATION=passed" >> build/deploy/release.txt
+          fi
+        '''
+        archiveArtifacts artifacts: 'dist/*.tar.gz,build/deploy/release.txt', allowEmptyArchive: true
+      }
+    }
+  }
+
+  post {
+    always {
+      echo "Build result: ${currentBuild.currentResult}"
+    }
+    failure {
+      echo "Training failure: inspect the AI payload and Jenkins stage that failed."
+    }
+  }
+}
