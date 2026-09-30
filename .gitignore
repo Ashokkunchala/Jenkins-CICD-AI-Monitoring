@@ -8,28 +8,36 @@ crash.*.log
 tfplan
 *.tfvars
 !terraform.tfvars.example
+!examples/simple/terraform.tfvars.example
+
 # Generated archives
 *.generated.zip
 modules/ai-cicd-agent/lambdas/*.zip
 modules/instance-scheduler/*.zip
 
-# Preserved offline state copies (never loaded by Terraform)
+# Preserved offline state copies
 *.tfstate.local
 *.tfstate.backup.local
 
-# Generated/private keys
+# Secrets and private keys
 *.pem
 *.key
+*.p12
+*.pfx
+*.jks
 *.pub
+.env
+.env.*
+!.env.example
 .ssh/
+
+# Runtime artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
 # OS / editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
-
-# Runtime artifacts
-__pycache__/
-*.py[cod]
-.pytest_cache/
