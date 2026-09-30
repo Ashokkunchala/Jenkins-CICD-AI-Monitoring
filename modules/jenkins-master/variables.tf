@@ -127,6 +127,18 @@ variable "ami_id" {
   default     = ""
 }
 
+variable "associate_public_ip_address" {
+  description = "Assign a public IPv4 address at launch; disable for production private-subnet controllers"
+  type        = bool
+  default     = true
+}
+
+variable "create_eip" {
+  description = "Create and attach an Elastic IP; disable when the controller is private behind an ALB"
+  type        = bool
+  default     = true
+}
+
 variable "extra_tags" {
   description = "Additional tags to apply to resources"
   type        = map(string)
