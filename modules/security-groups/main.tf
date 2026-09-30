@@ -4,27 +4,41 @@ resource "aws_security_group" "jenkins_master" {
   vpc_id      = var.vpc_id
 
   ingress {
-    description = "SSH"
+    description = "SSH from trusted administration network"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
     cidr_blocks = [var.allowed_ssh_cidr]
   }
 
-  ingress {
-    description = "Jenkins UI from trusted clients"
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "tcp"
-    cidr_blocks = [var.allowed_web_cidr]
+  dynamic "ingress" {
+    for_each = var.jenkins_alb_sg_id == "" ? [1] : []
+    content {
+      description = "Jenkins UI from trusted clients in non-ALB mode"
+      from_port   = 8080
+      to_port     = 8080
+      protocol    = "tcp"
+      cidr_blocks = [var.allowed_web_cidr]
+    }
+  }
+
+  dynamic "ingress" {
+    for_each = var.jenkins_alb_sg_id != "" ? [1] : []
+    content {
+      description     = "Jenkins UI only from production ALB"
+      from_port       = 8080
+      to_port         = 8080
+      protocol        = "tcp"
+      security_groups = [var.jenkins_alb_sg_id]
+    }
   }
 
   ingress {
-    description = "Jenkins UI from VPC"
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr_block]
+    description     = "Jenkins inbound agent/remoting traffic from agent SG"
+    from_port       = 50000
+    to_port         = 50000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.jenkins_agent.id]
   }
 
   egress {
@@ -35,9 +49,7 @@ resource "aws_security_group" "jenkins_master" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-${var.environment}-jenkins-master-sg"
-  }
+  tags = { Name = "${var.project_name}-${var.environment}-jenkins-master-sg" }
 }
 
 resource "aws_security_group" "jenkins_agent" {
@@ -53,9 +65,7 @@ resource "aws_security_group" "jenkins_agent" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-${var.environment}-jenkins-agent-sg"
-  }
+  tags = { Name = "${var.project_name}-${var.environment}-jenkins-agent-sg" }
 }
 
 resource "aws_security_group" "sonarqube" {
@@ -79,14 +89,6 @@ resource "aws_security_group" "sonarqube" {
     cidr_blocks = [var.allowed_web_cidr]
   }
 
-  ingress {
-    description = "PostgreSQL"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr_block]
-  }
-
   egress {
     description = "Allow outbound traffic"
     from_port   = 0
@@ -95,9 +97,7 @@ resource "aws_security_group" "sonarqube" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-${var.environment}-sonarqube-sg"
-  }
+  tags = { Name = "${var.project_name}-${var.environment}-sonarqube-sg" }
 }
 
 resource "aws_security_group" "nexus" {
@@ -137,7 +137,5 @@ resource "aws_security_group" "nexus" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-${var.environment}-nexus-sg"
-  }
+  tags = { Name = "${var.project_name}-${var.environment}-nexus-sg" }
 }
